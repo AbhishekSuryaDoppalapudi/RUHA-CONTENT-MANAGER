@@ -1,4 +1,4 @@
-# Whisper Content Manager (RUHA AI Video & Content Studio)
+# Whisper Content Manager (Ruach AI Video & Content Studio)
 
 Standalone page. Separate from the Indic Video Translator project.
 
