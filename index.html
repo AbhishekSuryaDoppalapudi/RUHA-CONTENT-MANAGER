@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RUHA AI Video &amp; Content Studio</title>
+<style>
+:root{--bg:#0a0820;--panel:rgba(22,16,56,.82);--line:rgba(167,139,250,.28);--text:#eee9ff;--muted:#b3acd9;
+--p1:#7c3aed;--p2:#a855f7;--pink:#ff3cac;--cyan:#38bdf8;}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font-family:"Segoe UI",system-ui,sans-serif;color:var(--text);
+ background:radial-gradient(1200px 600px at 20% -10%,#2b1466 0,transparent 60%),
+ radial-gradient(900px 500px at 100% 100%,#14306b 0,transparent 55%),var(--bg);}
+a{color:inherit;text-decoration:none}
+svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+/* top bar */
+.top{display:flex;align-items:center;gap:28px;padding:12px 28px;border-bottom:1px solid var(--line);background:rgba(10,8,32,.7);position:sticky;top:0;z-index:10;backdrop-filter:blur(8px)}
+.brand{display:flex;align-items:center;gap:12px;min-width:250px}
+.brand b{font-size:2rem;letter-spacing:1px;font-weight:800;line-height:1}
+.brand small{display:block;font-size:.78rem;color:var(--muted)}
+.nav{display:flex;gap:8px;margin:0 auto}
+.nav a{display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:12px;color:var(--text)}
+.nav a.on{background:linear-gradient(135deg,#6d3be0,#8b5cf6);box-shadow:0 0 0 1px #a78bfa66}
+.tools{display:flex;align-items:center;gap:18px}
+.avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:700;background:linear-gradient(135deg,#7c3aed,#c026d3)}
+/* layout */
+.wrap{display:grid;grid-template-columns:250px 1fr 290px;gap:22px;padding:22px 28px 70px;max-width:1500px;margin:auto}
+.side{display:flex;flex-direction:column;gap:6px}
+.side a{display:flex;align-items:center;gap:14px;padding:13px 16px;border-radius:12px;color:#ddd6fb}
+.side a:hover{background:rgba(255,255,255,.06)}
+.side a.on{background:linear-gradient(135deg,#5b2fc9,#7c3aed);color:#fff;box-shadow:0 0 0 1px #a78bfa66}
+.side hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+/* hero */
+.hero{display:flex;align-items:center;gap:22px;padding:6px 0 18px}
+.hero .logo{width:110px;height:110px}
+.hero .bar{width:1px;align-self:stretch;background:var(--line)}
+.hero h1{margin:0;font-size:2.5rem;font-weight:800}
+.grad{background:linear-gradient(90deg,#8b5cf6,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{margin:6px 0 0;font-size:1.3rem;color:#e6defd}
+.chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:6px 0 18px}
+.chips span{display:flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;font-size:.92rem;background:rgba(124,58,237,.18);border:1px solid var(--line)}
+/* card */
+.card{border:1px solid var(--line);border-radius:18px;background:var(--panel);overflow:hidden}
+.tabs{display:flex;gap:4px;padding:10px;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;display:flex;align-items:center;justify-content:center;gap:9px;padding:12px;border:0;border-radius:12px;background:transparent;color:var(--text);font-weight:600;font-size:1rem;font-family:inherit;cursor:pointer}
+.tabs button.on{background:linear-gradient(135deg,#6d3be0,#a855f7);box-shadow:0 6px 20px rgba(124,58,237,.45)}
+.pane{display:none;padding:18px 22px 24px}.pane.on{display:block}
+.drop{margin:14px 0;border:2px dashed #a855f7;border-radius:18px;padding:34px 10px;text-align:center;background:rgba(40,20,90,.45)}
+.drop h3{margin:8px 0 2px;font-size:1.3rem}.drop p{margin:2px 0 12px;color:var(--muted)}
+.drop small{color:var(--muted);display:block;margin-top:10px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 26px;border:0;border-radius:10px;color:#fff;font-weight:600;font-size:1rem;font-family:inherit;cursor:pointer;background:linear-gradient(135deg,#6d3be0,#8b5cf6)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:10px}
+.field{border:1px solid var(--line);border-radius:14px;padding:10px 14px;background:rgba(20,14,50,.7)}
+.field label{display:flex;align-items:center;gap:8px;color:#d7cffa;font-size:.92rem;margin-bottom:8px}
+.field select,.field input{width:100%;padding:12px 14px;border-radius:12px;border:1.5px solid #8b5cf6aa;background:linear-gradient(135deg,#241a52,#2c1f66);color:#fff;font-weight:600;font-size:1.05rem;font-family:inherit}
+.opts{display:flex;gap:30px;align-items:center;margin-top:14px;padding:12px 16px;border-radius:12px;background:rgba(255,60,172,.12);border:1px solid rgba(255,60,172,.4)}
+.opts label{display:flex;align-items:center;gap:10px;flex:1}
+.opts input{width:22px;height:22px;accent-color:var(--pink)}
+.gen{display:flex;justify-content:center;margin-top:20px}
+.gen .btn{padding:15px 56px;font-size:1.1rem;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#2f7bf5);box-shadow:0 8px 28px rgba(80,90,240,.5)}
+.soon{text-align:center;padding:60px 10px;color:var(--muted)}
+.soon h3{color:var(--text);font-size:1.4rem;margin:12px 0 4px}
+/* promo */
+.promo{text-align:left;padding-top:20px}
+.promo h2{font-size:1.5rem;line-height:1.25;margin:16px 0}
+.promo h2 em{font-style:normal;color:var(--cyan)}
+.promo ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+.promo li{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.05)}
+.promo li i{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:rgba(124,58,237,.35)}
+.screen{height:170px;border-radius:16px;background:linear-gradient(135deg,#7c3aed,#2563eb 60%,#f59e0b);display:grid;place-items:center;box-shadow:0 12px 40px rgba(80,60,220,.5)}
+.screen svg{width:54px;height:54px;stroke:#fff;fill:#fff3}
+.credit{position:fixed;right:14px;bottom:10px;z-index:20;pointer-events:none;font-size:.8rem;color:rgba(233,222,252,.55);text-shadow:0 1px 6px rgba(0,0,0,.6)}
+.credit b{color:rgba(255,122,198,.8);font-weight:600}
+@media(max-width:1100px){.wrap{grid-template-columns:1fr}.promo,.nav{display:none}.side{flex-direction:row;overflow-x:auto}}
+</style>
+</head>
+<body>
+<svg style="display:none">
+ <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></symbol>
+ <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></symbol>
+ <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></symbol>
+ <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></symbol>
+ <symbol id="i-translate" viewBox="0 0 24 24"><path d="M4 5h9M8 3v2M6 5c1 4 4 7 7 8M12 5c-1 4-4 7-8 9M14 21l4-10 4 10M15.5 18h5"/></symbol>
+ <symbol id="i-clap" viewBox="0 0 24 24"><path d="M3 9h18v11H3zM3 9l2-5 4 1M9 5l3 4M14 5l3 4"/></symbol>
+ <symbol id="i-play" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 9l5 3-5 3z"/></symbol>
+ <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 18l6-5 4 3 3-3 5 4"/></symbol>
+ <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+ <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+ <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 015 0c0 1.5-2.500 2-2.500 3.500M12 17h.01"/></symbol>
+ <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></symbol>
+ <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 01-.5-8 6 6 0 0111.500 1.500A3.500 3.500 0 0117 18zM12 11v6M9.500 13.500L12 11l2.500 2.500"/></symbol>
+ <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></symbol>
+ <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></symbol>
+ <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8 8l12 10M8 16L20 6"/></symbol>
+ <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7"/></symbol>
+ <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V12M12 20V5M19 20v-9"/></symbol>
+ <symbol id="i-quote" viewBox="0 0 24 24"><path d="M5 17c0-5 1-8 5-10M13 17c0-5 1-8 5-10"/></symbol>
+ <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 64 64" style="width:56px;height:56px;stroke:none"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff3cac"/><stop offset=".5" stop-color="#8b5cf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><path d="M12 8h26a14 14 0 011 27l16 21H40L27 38v18H12z" fill="url(#g)"/><path d="M20 20v10h16a5 5 0 000-10z" fill="#0a0820"/></svg>
+    <div><b>RUHA</b><small>AI Video &amp; Content Studio</small></div>
+  </div>
+  <nav class="nav">
+    <a class="on" href="#"><svg><use href="#i-home"/></svg>Home</a>
+    <a href="#"><svg><use href="#i-layers"/></svg>Projects</a>
+    <a href="#"><svg><use href="#i-folder"/></svg>Library</a>
+    <a href="#"><svg><use href="#i-grid"/></svg>Templates</a>
+    <a href="#"><svg><use href="#i-folder"/></svg>RUHA Manager</a>
+  </nav>
+  <div class="tools"><svg><use href="#i-gear"/></svg><svg><use href="#i-help"/></svg><div class="avatar">AS</div></div>
+</header>
+
+<div class="wrap">
+  <aside class="side">
+    <a class="on" href="#"><svg><use href="#i-spark"/></svg>AI Studio</a>
+    <a href="#"><svg><use href="#i-translate"/></svg>Video Translation</a>
+    <a href="#"><svg><use href="#i-clap"/></svg>Video Creator</a>
+    <a href="#"><svg><use href="#i-play"/></svg>Reels Generator</a>
+    <a href="#"><svg><use href="#i-image"/></svg>Post &amp; Poster Maker</a>
+    <a href="#"><svg><use href="#i-cal"/></svg>Content Planner</a>
+    <a href="#"><svg><use href="#i-folder"/></svg>Projects</a>
+    <hr>
+    <a href="#"><svg><use href="#i-layers"/></svg>RUHA Manager</a>
+    <a href="#"><svg><use href="#i-gear"/></svg>Settings</a>
+  </aside>
+
+  <main>
+    <div class="hero">
+      <svg class="logo" viewBox="0 0 64 64" style="stroke:none"><path d="M12 8h26a14 14 0 011 27l16 21H40L27 38v18H12z" fill="url(#g)"/><path d="M20 20v10h16a5 5 0 000-10z" fill="#0a0820"/></svg>
+      <div class="bar"></div>
+      <div><h1>RUHA <span class="grad">AI Video &amp; Content Studio</span></h1><p>Translate. Dub. Create. Repurpose. Inspire.</p></div>
+    </div>
+    <div class="chips">
+      <span><svg><use href="#i-mic"/></svg>Whisper</span><span><svg><use href="#i-translate"/></svg>IndicTrans2</span>
+      <span><svg><use href="#i-mic"/></svg>Indic Parler-TTS</span><span><svg><use href="#i-clap"/></svg>FFmpeg</span><span><svg><use href="#i-play"/></svg>4K Output</span>
+    </div>
+
+    <section class="card">
+      <div class="tabs" id="tabs">
+        <button class="on" data-t="t1"><svg><use href="#i-translate"/></svg>Video Translation</button>
+        <button data-t="t2"><svg><use href="#i-clap"/></svg>Video Creation</button>
+        <button data-t="t3"><svg><use href="#i-bolt"/></svg>Reels Generator</button>
+        <button data-t="t4"><svg><use href="#i-image"/></svg>Post &amp; Poster Maker</button>
+      </div>
+
+      <div class="pane on" id="t1">
+        <div style="color:var(--muted)">Upload a video, choose a language, and get subtitles plus a dubbed version.</div>
+        <div class="drop">
+          <svg style="width:46px;height:46px;color:#c4b5fd"><use href="#i-cloud"/></svg>
+          <h3>Drop Video Here</h3><p>— or —</p>
+          <button class="btn"><svg><use href="#i-folder"/></svg>Upload Video</button>
+          <small>MP4, MOV, MKV (up to 4 GB)</small>
+        </div>
+        <div class="row">
+          <div class="field"><label><svg><use href="#i-mic"/></svg>Language spoken in the video</label>
+            <select><option>Auto-detect</option><option>English</option><option>Hindi</option><option>Telugu</option><option>Tamil</option><option>Kannada</option></select></div>
+          <div class="field"><label><svg><use href="#i-translate"/></svg>Translate into</label>
+            <select><option>Hindi</option><option>Telugu</option><option>Tamil</option><option>Kannada</option><option>English</option></select></div>
+        </div>
+        <div class="opts">
+          <label><input type="checkbox" checked><svg><use href="#i-mic"/></svg>Dub the audio (AI Voice)</label>
+          <label><input type="checkbox" checked>Show subtitles on the video (burned in)</label>
+        </div>
+        <div class="row">
+          <div class="field"><label><svg><use href="#i-clock"/></svg>Start at (seconds)</label><input type="number" value="0"></div>
+          <div class="field"><label><svg><use href="#i-bolt"/></svg>Process only this many seconds (0 = full video)</label><input type="number" value="0"></div>
+        </div>
+        <div class="gen"><button class="btn"><svg><use href="#i-spark"/></svg>Generate Translation &nbsp;›</button></div>
+      </div>
+
+      <div class="pane" id="t2"><div class="soon"><svg style="width:48px;height:48px"><use href="#i-clap"/></svg><h3>Video Creation</h3>Coming soon.</div></div>
+      <div class="pane" id="t3"><div class="soon"><svg style="width:48px;height:48px"><use href="#i-bolt"/></svg><h3>Reels Generator</h3>Coming soon.</div></div>
+      <div class="pane" id="t4"><div class="soon"><svg style="width:48px;height:48px"><use href="#i-image"/></svg><h3>Post &amp; Poster Maker</h3>Coming soon.</div></div>
+    </section>
+  </main>
+
+  <aside class="promo">
+    <div class="screen"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></div>
+    <h2>From One Video,<br><em>Create Everything</em></h2>
+    <ul>
+      <li><i><svg><use href="#i-play"/></svg></i>3 Highlight Reels</li>
+      <li><i><svg><use href="#i-cut"/></svg></i>2 Short Reels</li>
+      <li><i><svg><use href="#i-image"/></svg></i>1 Highlight Poster</li>
+      <li><i><svg><use href="#i-quote"/></svg></i>2 Encouraging Posts</li>
+      <li><i><svg><use href="#i-doc"/></svg></i>Full Transcript</li>
+      <li><i><svg><use href="#i-chart"/></svg></i>Key Summary &amp; Topics</li>
+    </ul>
+  </aside>
+</div>
+
+<div class="credit">Developed and created by <b>Abhishek Surya Doppalapudi</b></div>
+<script>
+document.querySelectorAll('#tabs button').forEach(function(b){b.onclick=function(){
+ document.querySelectorAll('#tabs button,.pane').forEach(function(x){x.classList.remove('on')});
+ b.classList.add('on');document.getElementById(b.dataset.t).classList.add('on');};});
+</script>
+</body>
+</html>
