@@ -1,0 +1,50 @@
+@import '@fontsource-variable/outfit';
+@import '@fontsource-variable/inter';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root, [data-theme='dark'] {
+  --bg: 11 16 32; --surface: 19 26 51; --surface2: 28 37 70; --line: 45 55 95;
+  --ink: 236 239 250; --muted: 148 158 196;
+  --primary: 124 58 237; --accent: 34 211 238; --teal: 45 212 191;
+  --ok: 52 211 153; --warn: 251 191 36; --danger: 248 113 113;
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --bg: 244 246 252; --surface: 255 255 255; --surface2: 238 241 250; --line: 214 220 238;
+  --ink: 17 24 50; --muted: 96 106 140;
+  --primary: 109 40 217; --accent: 8 145 178; --teal: 13 148 136;
+  --ok: 5 150 105; --warn: 180 83 9; --danger: 220 38 38;
+  color-scheme: light;
+}
+
+html, body, #root { height: 100%; }
+body {
+  @apply bg-bg text-ink font-sans antialiased;
+  background-image:
+    radial-gradient(900px 500px at 85% -10%, rgb(var(--primary) / .18), transparent 60%),
+    radial-gradient(700px 400px at -5% 105%, rgb(var(--accent) / .10), transparent 60%);
+  background-attachment: fixed;
+}
+h1, h2, h3, .font-display { font-family: 'Outfit Variable', 'Segoe UI', sans-serif; letter-spacing: -0.01em; }
+
+@layer components {
+  .card { @apply bg-surface/90 border border-line/70 rounded-2xl backdrop-blur; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium transition
+    disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/70; }
+  .btn-primary { @apply btn text-white bg-gradient-to-br from-primary to-[#5b2bd0] hover:brightness-110 shadow-glow; }
+  .btn-ghost { @apply btn bg-surface2/70 hover:bg-surface2 border border-line/70; }
+  .btn-danger { @apply btn bg-danger/15 text-danger hover:bg-danger/25 border border-danger/30; }
+  .btn-ok { @apply btn bg-ok/15 text-ok hover:bg-ok/25 border border-ok/30; }
+  .input { @apply w-full rounded-xl bg-bg/60 border border-line/80 px-3 py-2 text-sm placeholder:text-muted/70
+    focus:outline-none focus:ring-2 focus:ring-accent/60 focus:border-accent/60; }
+  .label { @apply block text-xs font-medium text-muted mb-1; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border; }
+  .h-page { @apply font-display text-2xl font-semibold; }
+}
+.skeleton { position: relative; overflow: hidden; background: rgb(var(--surface2) / .7); border-radius: 12px; }
+.skeleton::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--ink) / .06), transparent); animation: shimmer 1.4s infinite; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(var(--line)); border-radius: 8px; }

@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
+
+from ruha.api.deps import app_ctx, file_response, get_or_404
+from ruha.config import JOB_TYPES, PROJECT_STATUSES
+from ruha.models import (AuditLog, ContentTag, GeneratedAsset, ProcessingJob, Project, SourceVideo, Transcript,
+                         TranscriptSegment, Translation)
+from ruha.services import assets as asset_svc
+from ruha.services import projects as svc
+
+router = APIRouter(prefix="/api", tags=["projects"])
+
+
+class ProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    content_type: str = "sermon"
+    tags: list = []
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    content_type: str | None = None
+    tags: list | None = None
+    status: str | None = None
+
+
+class ProcessIn(BaseModel):
+    steps: list | None = None
+    translations: list = []
+
+
+class JobIn(BaseModel):
+    job_type: str
+    params: dict = {}
+
+
+SORTS = {"name": Project.name, "created": Project.created_at, "updated": Project.updated_at,
+         "status": Project.status}
+
+
+@router.get("/projects")
+def list_projects(q: str = "", status: str = "", content_type: str = "", tag: str = "",
+                  created_from: str = "", created_to: str = "", sort: str = "created", order: str = "desc",
+                  include_archived: bool = False, limit: int = 100, offset: int = 0, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        qs = s.query(Project)
+        if status:
+            qs = qs.filter(Project.status == status)
+        elif not include_archived:
+            qs = qs.filter(Project.status != "archived")
+        if content_type:
+            qs = qs.filter(Project.content_type == content_type)
+        if q:
+            like = f"%{q}%"
+            qs = qs.filter(or_(Project.name.ilike(like), Project.description.ilike(like),
+                               Project.id.in_(s.query(ContentTag.entity_id).filter(
+                                   ContentTag.entity_type == "project", ContentTag.tag.ilike(like)))))
+        if tag:
+            qs = qs.filter(Project.id.in_(s.query(ContentTag.entity_id).filter(
+                ContentTag.entity_type == "project", ContentTag.tag == tag.lower())))
+        try:
+            if created_from:
+                qs = qs.filter(Project.created_at >= datetime.fromisoformat(created_from))
+            if created_to:
+                qs = qs.filter(Project.created_at <= datetime.fromisoformat(created_to + ("T23:59:59" if len(created_to) == 10 else "")))
+        except ValueError:
+            raise HTTPException(400, "Dates must be ISO formatted (YYYY-MM-DD)")
+        total = qs.count()
+        col = SORTS.get(sort, Project.created_at)
+        qs = qs.order_by(col.asc() if order == "asc" else col.desc())
+        rows = qs.offset(max(0, offset)).limit(max(1, min(limit, 500))).all()
+        return {"total": total, "items": [svc.serialize(s, p) for p in rows]}
+
+
+@router.post("/projects", status_code=201)
+def create_project(body: ProjectIn, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = svc.create(ctx, s, body.name, body.description, body.content_type, body.tags)
+        s.flush()
+        return svc.serialize(s, p)
+
+
+@router.get("/projects/{pid}")
+def get_project(pid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        d = svc.serialize(s, p)
+        d["videos"] = [svc.video_dict(v) for v in s.query(SourceVideo).filter_by(project_id=pid).order_by(SourceVideo.id.desc())]
+        d["jobs"] = [_job_brief(j) for j in s.query(ProcessingJob).filter_by(project_id=pid).order_by(ProcessingJob.id.desc()).limit(30)]
+        d["translations"] = [{"id": t.id, "target": t.target_language, "dubbed": t.dubbed, "status": t.status,
+                              "video_asset_id": t.video_asset_id, "srt_asset_id": t.srt_asset_id,
+                              "audio_asset_id": t.audio_asset_id} for t in s.query(Translation).filter_by(project_id=pid)]
+        return d
+
+
+def _job_brief(j):
+    return {"id": j.id, "job_type": j.job_type, "status": j.status, "progress": j.progress, "step": j.step,
+            "error": j.error, "created_at": j.created_at.isoformat(),
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None}
+
+
+@router.patch("/projects/{pid}")
+def patch_project(pid: int, body: ProjectPatch, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        if body.name is not None:
+            p.name = body.name.strip()
+        if body.description is not None:
+            p.description = body.description
+        if body.content_type is not None:
+            p.content_type = body.content_type
+        if body.tags is not None:
+            svc.set_tags(s, "project", pid, body.tags)
+        if body.status is not None:
+            if body.status == "archived":
+                svc.archive(ctx, s, p)
+            else:
+                svc.set_status(ctx, s, p, body.status)
+        ctx.audit(s, "project", pid, "update", fields=[k for k, v in body.model_dump().items() if v is not None])
+        s.flush()
+        return svc.serialize(s, p)
+
+
+@router.delete("/projects/{pid}")
+def delete_project(pid: int, confirm: bool = Query(False), ctx=Depends(app_ctx)):
+    if not confirm:
+        raise HTTPException(400, "Deleting a project is permanent - pass confirm=true")
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        info = svc.delete(ctx, s, p)
+    clean = svc.finish_delete(ctx, info)
+    return {"deleted": pid, "files_removed": clean}
+
+
+@router.post("/projects/{pid}/duplicate", status_code=201)
+def duplicate(pid: int, include_assets: bool = False, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        new = svc.duplicate(ctx, s, p, include_assets)
+        s.flush()
+        return svc.serialize(s, new)
+
+
+@router.post("/projects/{pid}/archive")
+def archive(pid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        svc.archive(ctx, s, p)
+        return svc.serialize(s, p)
+
+
+@router.post("/projects/{pid}/unarchive")
+def unarchive(pid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        svc.unarchive(ctx, s, p)
+        return svc.serialize(s, p)
+
+
+@router.get("/projects/{pid}/history")
+def history(pid: int, ctx=Depends(app_ctx)):
+    import json
+    with ctx.db.session() as s:
+        get_or_404(s, Project, pid, "Project")
+        asset_ids = [a for a, in s.query(GeneratedAsset.id).filter_by(project_id=pid)]
+        rows = s.query(AuditLog).filter(or_(
+            (AuditLog.entity_type == "project") & (AuditLog.entity_id == pid),
+            (AuditLog.entity_type == "asset") & (AuditLog.entity_id.in_(asset_ids or [-1])))) \
+            .order_by(AuditLog.id.desc()).limit(200).all()
+        return [{"id": r.id, "entity": r.entity_type, "entity_id": r.entity_id, "action": r.action,
+                 "actor": r.actor, "detail": json.loads(r.detail_json) if r.detail_json else {},
+                 "at": r.created_at.isoformat()} for r in rows]
+
+
+@router.get("/projects/{pid}/thumbnail")
+def thumbnail(pid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        path = p.thumbnail_path
+    return file_response(ctx, path)
+
+
+# ---------------------------------- videos -----------------------------------
+@router.post("/projects/{pid}/videos", status_code=201)
+def upload_video(pid: int, file: UploadFile = File(...), replace: bool = Form(False), ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        if not replace and s.query(SourceVideo).filter_by(project_id=pid, is_current=True).count():
+            raise HTTPException(409, "This project already has a video. Use replace=true to replace it (the old file is kept).")
+        tmp = svc.save_upload(ctx, p, file.file, file.filename or "video.mp4")
+        v = svc.attach_video(ctx, s, p, tmp, file.filename or "video.mp4", replace=replace)
+        s.flush()
+        dups = svc.duplicates_of(s, v)
+        return {"video": svc.video_dict(v), "duplicates": dups}
+
+
+@router.delete("/videos/{vid}")
+def delete_video(vid: int, confirm: bool = Query(False), ctx=Depends(app_ctx)):
+    if not confirm:
+        raise HTTPException(400, "Pass confirm=true to delete the video file")
+    with ctx.db.session() as s:
+        v = get_or_404(s, SourceVideo, vid, "Video")
+        p = s.get(Project, v.project_id)
+        svc.delete_video(ctx, s, v, p)
+    return {"deleted": vid}
+
+
+@router.get("/videos/{vid}/stream")
+def stream_video(vid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        v = get_or_404(s, SourceVideo, vid, "Video")
+        path = v.path
+    return file_response(ctx, path)
+
+
+@router.get("/videos/{vid}/thumbnail")
+def video_thumb(vid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        v = get_or_404(s, SourceVideo, vid, "Video")
+        path = v.thumbnail_path
+    return file_response(ctx, path)
+
+
+@router.get("/videos/{vid}/download")
+def download_video(vid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        v = get_or_404(s, SourceVideo, vid, "Video")
+        path, name = v.path, v.original_name
+    return file_response(ctx, path, filename=name, download=True)
+
+
+# ------------------------------- processing ----------------------------------
+@router.post("/projects/{pid}/process", status_code=202)
+def process(pid: int, body: ProcessIn | None = None, ctx=Depends(app_ctx)):
+    body = body or ProcessIn()
+    with ctx.db.session() as s:
+        get_or_404(s, Project, pid, "Project")
+        if not svc.current_video(s, pid):
+            raise HTTPException(400, "Upload a video before processing")
+    ids = ctx.queue.enqueue_pipeline(pid, body.steps, body.translations)
+    return {"job_ids": ids}
+
+
+@router.post("/projects/{pid}/jobs", status_code=202)
+def create_job(pid: int, body: JobIn, ctx=Depends(app_ctx)):
+    if body.job_type not in JOB_TYPES:
+        raise HTTPException(400, f"job_type must be one of {JOB_TYPES}")
+    with ctx.db.session() as s:
+        get_or_404(s, Project, pid, "Project")
+        if body.job_type != "video_rendering" and not svc.current_video(s, pid):
+            raise HTTPException(400, "Upload a video first")
+    return {"job_id": ctx.queue.enqueue(body.job_type, pid, body.params)}
+
+
+@router.get("/projects/{pid}/transcript")
+def transcript(pid: int, q: str = "", ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        get_or_404(s, Project, pid, "Project")
+        t = s.query(Transcript).filter_by(project_id=pid).order_by(Transcript.id.desc()).first()
+        if not t:
+            return {"exists": False}
+        segs = s.query(TranscriptSegment).filter_by(transcript_id=t.id).order_by(TranscriptSegment.idx)
+        if q:
+            segs = segs.filter(TranscriptSegment.text.ilike(f"%{q}%"))
+        return {"exists": True, "id": t.id, "language": t.language, "model": t.model, "summary": t.summary,
+                "themes": t.themes, "quotes": t.quotes, "plan": t.plan,
+                "segments": [{"idx": g.idx, "start": g.start, "end": g.end, "text": g.text} for g in segs.limit(5000)]}
