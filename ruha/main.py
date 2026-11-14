@@ -46,12 +46,12 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     async def lifespan(app: FastAPI):
         setup_logging(settings, ctx.config.get("logging.level", "INFO"))
         ctx.start()
-        log.info("RUHA Manager %s started (data: %s)", __version__, settings.data_dir.name)
+        log.info("El Ruach Manager %s started (data: %s)", __version__, settings.data_dir.name)
         yield
         ctx.stop()
 
-    app = FastAPI(title="RUHA Manager API", version=__version__, lifespan=lifespan,
-                  description="Local-first content management for RUHA AI Video & Content Studio")
+    app = FastAPI(title="El Ruach Manager API", version=__version__, lifespan=lifespan,
+                  description="Local-first content management for El Ruach AI Video & Content Studio")
     app.state.ctx = ctx
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"],
                        allow_headers=["*"])

@@ -9,7 +9,7 @@ storage/temp/*
 !storage/uploads/.gitkeep
 !storage/projects/.gitkeep
 !storage/temp/.gitkeep
-# RUHA Manager runtime data (databases, videos, generated files, backups) - never commit
+# El Ruach Manager runtime data (databases, videos, generated files, backups) - never commit
 ruha_data/
 # portable Node used only to build the UI, and build output
 tools/

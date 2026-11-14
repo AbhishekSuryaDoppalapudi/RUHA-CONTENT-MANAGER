@@ -1,4 +1,4 @@
-# RUHA Manager backend (Python 3.11 - 3.13)
+# El Ruach Manager backend (Python 3.11 - 3.13)
 fastapi>=0.115
 uvicorn[standard]>=0.30
 sqlalchemy>=2.0,<2.1        # 2.1's compiled extensions are blocked by some Windows Application Control policies

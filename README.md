@@ -1,10 +1,10 @@
-﻿# RUHA Manager
+# El Ruach Manager
 
-**Create. Manage. Inspire.** - the local content-management system for *RUHA AI Video & Content Studio*.
+**Create. Manage. Inspire.** - the local content-management system for *El Ruach AI Video & Content Studio*.
 
 Upload a video â†’ transcribe it â†’ get 3 highlight reels, 2 short reels, a poster and 2 encouragement posts â†’
 review and approve each asset â†’ schedule it â†’ search everything you have ever produced. Translation and dubbing
-use the existing **RUHA Video Translator**. Everything runs on your own computer: no cloud AI, no paid APIs,
+use the existing **El Ruach Video Translator**. Everything runs on your own computer: no cloud AI, no paid APIs,
 nothing is uploaded anywhere.
 
 | Layer | Technology |
@@ -13,7 +13,7 @@ nothing is uploaded anywhere.
 | AI (all local) | faster-whisper Â· Ollama (default `qwen2.5:3b`) Â· ChromaDB + local embeddings |
 | Media | FFmpeg / FFprobe, Pillow |
 | Frontend | React, TypeScript, Vite, Tailwind CSS, Lucide |
-| Translation / dubbing | existing RUHA Video Translator (IndicTrans2 + Parler-TTS), called through a bridge |
+| Translation / dubbing | existing El Ruach Video Translator (IndicTrans2 + Parler-TTS), called through a bridge |
 
 ## Install (Windows 10/11)
 

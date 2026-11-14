@@ -54,7 +54,7 @@ def create_backup(app, include_media: bool = True, label: str = "") -> Path:
             src.backup(dst)                      # consistent snapshot even while the app is running
         src.close()
         dst.close()
-        manifest = {"app": "RUHA Manager", "version": __version__, "created_at": datetime.now().isoformat(),
+        manifest = {"app": "El Ruach Manager", "version": __version__, "created_at": datetime.now().isoformat(),
                     "data_dir": str(s.data_dir), "include_media": include_media,
                     "schema_version": app.db.schema_version()}
         with zipfile.ZipFile(dest.with_suffix(".tmp"), "w", zipfile.ZIP_DEFLATED, compresslevel=3) as z:
@@ -79,7 +79,7 @@ def inspect_backup(path: Path) -> dict:
         with zipfile.ZipFile(path) as z:
             safe_extract_names(z.namelist())
             if "manifest.json" not in z.namelist() or "ruha.db" not in z.namelist():
-                raise BackupError("Not a RUHA Manager backup (manifest or database missing)")
+                raise BackupError("Not a El Ruach Manager backup (manifest or database missing)")
             return json.loads(z.read("manifest.json"))
     except zipfile.BadZipFile as e:
         raise BackupError("File is not a valid zip archive") from e
@@ -111,7 +111,7 @@ def restore_backup(app, path: Path, wait_seconds: int = 120) -> dict:
     """Replace the live data with a backup. A safety backup is made first."""
     manifest = inspect_backup(path)
     if manifest.get("schema_version", 0) > app.db.schema_version():
-        raise BackupError("Backup was made by a newer RUHA Manager version; update the application first")
+        raise BackupError("Backup was made by a newer El Ruach Manager version; update the application first")
     s = app.settings
     app.maintenance.set()
     try:

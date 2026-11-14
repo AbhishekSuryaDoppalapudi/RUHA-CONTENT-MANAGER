@@ -10,7 +10,7 @@ export default function MemoryPage() {
   const stats = useApi(() => api.get<any>('/api/memory/stats'), [])
   return (
     <>
-      <PageHeader title="AI memory" subtitle="What RUHA remembers locally: transcripts, themes, captions, your approvals and preferences. Retrieval only - no model is trained." actions={<>
+      <PageHeader title="AI memory" subtitle="What El Ruach remembers locally: transcripts, themes, captions, your approvals and preferences. Retrieval only - no model is trained." actions={<>
         <a className="btn-ghost" href="/api/memory/export"><Download size={15} />Export</a></>} />
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-5">
         {['transcript', 'summary', 'theme', 'quote', 'caption', 'post', 'preference'].map((k) => (
@@ -72,7 +72,7 @@ function PrefsTab({ onChange }: { onChange: () => void }) {
   const add = async () => { if (!text.trim()) return; try { await api.post('/api/memory/preferences', { text }); setText(''); toast.ok('Preference remembered'); reload(); onChange() } catch (e) { toast.err(e) } }
   return (
     <div className="max-w-3xl space-y-4">
-      <p className="text-sm text-muted">Tell RUHA about your style and brand voice. These notes are added to every content-planning prompt.</p>
+      <p className="text-sm text-muted">Tell El Ruach about your style and brand voice. These notes are added to every content-planning prompt.</p>
       <div className="flex gap-2"><input className="input" placeholder="e.g. Always keep captions warm, under 120 characters, with no emojis" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />
         <button className="btn-primary" onClick={add}><Plus size={15} />Add</button></div>
       {loading ? <Loading rows={2} /> : data.items.length === 0 ? <Empty title="No preferences yet" /> : (

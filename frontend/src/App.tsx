@@ -79,7 +79,7 @@ function Shell() {
       <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-line/60 bg-surface/60 backdrop-blur sticky top-0 h-screen p-4">
         <div className="flex items-center gap-3 px-2 mb-6">
           <Logo />
-          <div className="leading-tight"><p className="font-display font-semibold text-lg">RUHA <span className="text-accent">Manager</span></p><p className="text-[10px] text-muted">Create. Manage. Inspire.</p></div>
+          <div className="leading-tight"><p className="font-display font-semibold text-lg">El Ruach <span className="text-accent">Manager</span></p><p className="text-[10px] text-muted">Create. Manage. Inspire.</p></div>
         </div>
         <nav className="flex flex-col gap-1 overflow-y-auto" aria-label="Main">
           {NAV.map(({ to, label, icon: I, end }) => (
@@ -87,11 +87,11 @@ function Shell() {
               <I size={18} />{label}
             </NavLink>))}
         </nav>
-        <p className="mt-auto text-[10px] text-muted px-2">RUHA AI Video &amp; Content Studio<br />Runs fully on this computer.</p>
+        <p className="mt-auto text-[10px] text-muted px-2">El Ruach AI Video &amp; Content Studio<br />Runs fully on this computer.</p>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-30 flex items-center gap-3 px-4 md:px-8 py-3 border-b border-line/50 bg-bg/70 backdrop-blur">
-          <div className="md:hidden flex items-center gap-2"><Logo size={28} /><span className="font-display font-semibold">RUHA</span></div>
+          <div className="md:hidden flex items-center gap-2"><Logo size={28} /><span className="font-display font-semibold">El Ruach</span></div>
           <div className="flex-1" />
           <QueueChip /><Reminders />
           <button className="btn-ghost !p-2" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle light/dark mode" title="Toggle light/dark mode">

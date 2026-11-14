@@ -85,7 +85,7 @@ function Updates() {
   if (loading && !data) return <Loading rows={1} />
   if (error) return <ErrorBox error={error} retry={reload} />
   return (
-    <div className="card p-4 max-w-2xl space-y-2 text-sm"><p>RUHA Manager <b>{data.version}</b></p>
+    <div className="card p-4 max-w-2xl space-y-2 text-sm"><p>El Ruach Manager <b>{data.version}</b></p>
       {data.git && <p className="text-muted">Git branch <b>{data.git.branch}</b> @ {data.git.commit}{data.git.dirty ? ' (local changes)' : ''}</p>}
       <p>Update check: <b>{data.check}</b></p>
       <div><p className="text-muted mb-1">To update:</p><ol className="list-decimal ml-5 text-muted">{data.instructions.map((i: string) => <li key={i}>{i}</li>)}</ol></div>

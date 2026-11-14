@@ -227,7 +227,7 @@ export function useDebounced<T>(value: T, ms = 300) {
 
 export function Logo({ size = 36 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-label="RUHA">
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-label="El Ruach">
       <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#7C3AED" /><stop offset="1" stopColor="#22D3EE" /></linearGradient></defs>
       <rect width="64" height="64" rx="16" fill="rgb(var(--surface))" stroke="rgb(var(--line))" />
       <path d="M20 48V16h13a9 9 0 0 1 2 17.8L44 48" fill="none" stroke="url(#lg)" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />

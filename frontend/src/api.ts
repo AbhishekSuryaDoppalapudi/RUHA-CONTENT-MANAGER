@@ -1,4 +1,4 @@
-// Typed client for the RUHA Manager REST API (see /docs on the running server for the full schema).
+// Typed client for the El Ruach Manager REST API (see /docs on the running server for the full schema).
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) { super(message); this.status = status }
@@ -13,7 +13,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
     })
   } catch {
-    throw new ApiError('Cannot reach the RUHA backend. Is it running?', 0)
+    throw new ApiError('Cannot reach the El Ruach backend. Is it running?', 0)
   }
   if (!res.ok) {
     let msg = res.statusText

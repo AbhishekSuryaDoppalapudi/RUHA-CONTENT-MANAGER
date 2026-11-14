@@ -72,7 +72,7 @@ function Status({ s }: { s: any }) {
           <p className="text-muted">Active LLM: <b className="text-ink">{s.active_llm}</b></p>
           <p className="text-xs text-muted">{s.ollama.connected ? (s.ollama.active_installed ? 'Connected - model installed' : `Connected - run “ollama pull ${s.active_llm}”`) : 'Not running. Start Ollama to enable content planning (transcription still works).'}</p></div>
         <div className="card p-4 space-y-1"><p className="flex items-center gap-2 font-medium"><Dot ok={s.ffmpeg.available} />FFmpeg</p><p className="text-muted">{s.ffmpeg.available ? 'Available' : 'Not found on PATH'}</p><p className="text-xs text-muted">NVENC GPU encoding: {s.ffmpeg.nvenc ? 'available' : 'not available'}</p></div>
-        <div className="card p-4 space-y-1"><p className="flex items-center gap-2 font-medium"><Dot ok={s.translator.available} warn />RUHA Translator</p><p className="text-muted">{s.translator.available ? 'Linked' : 'Not linked'}</p>
+        <div className="card p-4 space-y-1"><p className="flex items-center gap-2 font-medium"><Dot ok={s.translator.available} warn />El Ruach Translator</p><p className="text-muted">{s.translator.available ? 'Linked' : 'Not linked'}</p>
           <p className="text-xs text-muted break-all">{s.translator.available ? s.translator.directory : s.translator.reason}</p></div>
       </div>
       <p className="text-xs text-muted flex flex-wrap gap-x-4"><span>Model loading: {s.model_loading.policy}</span><span>Embedding: {s.embedding.active ?? 'n/a'}</span>{s.model_loading.active_job_id && <span className="text-accent">Running job #{s.model_loading.active_job_id}</span>}</p>

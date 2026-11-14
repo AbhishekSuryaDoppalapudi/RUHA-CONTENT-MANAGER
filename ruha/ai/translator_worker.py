@@ -21,7 +21,7 @@ def main():
     os.chdir(tdir)
     sys.path.insert(0, tdir)
     try:
-        import app as translator  # noqa: E402  (the existing RUHA Video Translator module)
+        import app as translator  # noqa: E402  (the existing El Ruach Video Translator module)
     except Exception as e:
         emit(error=f"Could not import translator app.py: {type(e).__name__}: {e}")
         sys.exit(2)

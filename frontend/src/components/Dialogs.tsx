@@ -92,7 +92,7 @@ export function RunJobModal({ mode, onClose, projectId }: { mode: 'generate' | '
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={dub} disabled={!DUB_LANGUAGES.has(target)} onChange={(e) => setDub(e.target.checked)} />
             Also dub the audio {!DUB_LANGUAGES.has(target) && <span className="text-xs text-muted">(voice not available for {target} - subtitles only)</span>}</label>
           {dub && <Field label="Voice"><select className="input" value={voice} onChange={(e) => setVoice(e.target.value)}><option>Female</option><option>Male</option></select></Field>}
-          <p className="text-xs text-muted">Uses the existing RUHA Video Translator (Whisper + IndicTrans2 + Parler-TTS). Models load one at a time.</p>
+          <p className="text-xs text-muted">Uses the existing El Ruach Video Translator (Whisper + IndicTrans2 + Parler-TTS). Models load one at a time.</p>
         </>)}
         {mode !== 'translate' && <p className="text-xs text-muted">Steps already completed (e.g. an existing transcript) are reused, not repeated.</p>}
         <div className="flex justify-end gap-2 pt-1">

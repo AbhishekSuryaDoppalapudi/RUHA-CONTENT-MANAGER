@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 DEFAULT_BRAND = {
-    "name": "RUHA",
+    "name": "El Ruach",
     "tagline": "Create. Manage. Inspire.",
     "colors": {"background": "#0B1020", "background2": "#1B1646", "primary": "#7C3AED",
                "accent": "#22D3EE", "accent2": "#2DD4BF", "text": "#FFFFFF", "muted": "#B6BDD6"},

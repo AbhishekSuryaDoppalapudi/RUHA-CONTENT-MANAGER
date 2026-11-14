@@ -5,7 +5,7 @@
 | Existing piece | Location | Decision |
 |---|---|---|
 | **Streamlit MVP** (`app/`, `services/`, `database/`, `run.bat`) - linear pipeline, tiny SQLite | this folder | **Kept untouched and runnable** (`run.bat`, own `storage/` + `content_agent.db`). Its prompt rules (3+2 reels, 15-30 s shorts, never invent quotes/references) and FFmpeg crop approach were carried into the new planner/renderer. |
-| **RUHA Video Translator** (Gradio, Whisper + IndicTrans2 + Parler-TTS, own venv with torch) | `C:\Dev\indic-video-translator` | **Not copied or modified.** `ruha/ai/translator.py` runs `ruha/ai/translator_worker.py` inside the translator's own Python and calls its existing `_translate_impl(...)`. Progress/results come back as JSON lines. Torch/transformers never enter the manager's environment. |
+| **El Ruach Video Translator** (Gradio, Whisper + IndicTrans2 + Parler-TTS, own venv with torch) | `C:\Dev\indic-video-translator` | **Not copied or modified.** `ruha/ai/translator.py` runs `ruha/ai/translator_worker.py` inside the translator's own Python and calls its existing `_translate_impl(...)`. Progress/results come back as JSON lines. Torch/transformers never enter the manager's environment. |
 | Translator's e-mail verification + Excel log (`access_log.process`) | translator | **Bypassed deliberately**: the manager is a single-owner local tool and calls `_translate_impl` directly, so translations started from the manager are *not* written to the translator's own `records/translation_log.xlsx`. The manager records them in its own database instead. |
 | Translator "story video" tab | translator | Not integrated (out of scope for this module); still works standalone. |
 

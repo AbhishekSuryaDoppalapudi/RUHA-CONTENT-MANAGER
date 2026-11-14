@@ -1,4 +1,4 @@
-"""Bridge to the existing RUHA Video Translator (Whisper + IndicTrans2 + Parler-TTS).
+"""Bridge to the existing El Ruach Video Translator (Whisper + IndicTrans2 + Parler-TTS).
 
 The translator keeps its own virtualenv (torch, transformers, gradio). To avoid duplicating
 or modifying it, the manager runs ``translator_worker.py`` inside the translator's Python

@@ -141,11 +141,11 @@ def clear_brand_file(ctx, slot: str) -> dict:
 
 # ------------------------------- templates ---------------------------------
 DEFAULT_TEMPLATES = [
-    ("poster", "RUHA Classic Poster", {"layout": "classic"}, True),
-    ("social", "RUHA Classic Post", {"layout": "classic"}, True),
-    ("social", "RUHA Band Post", {"layout": "band"}, False),
-    ("social", "RUHA Centered Post", {"layout": "centered"}, False),
-    ("reel", "RUHA Vertical Reel", {"width": 1080, "height": 1920, "subtitles": True}, True),
+    ("poster", "El Ruach Classic Poster", {"layout": "classic"}, True),
+    ("social", "El Ruach Classic Post", {"layout": "classic"}, True),
+    ("social", "El Ruach Band Post", {"layout": "band"}, False),
+    ("social", "El Ruach Centered Post", {"layout": "centered"}, False),
+    ("reel", "El Ruach Vertical Reel", {"width": 1080, "height": 1920, "subtitles": True}, True),
 ]
 
 

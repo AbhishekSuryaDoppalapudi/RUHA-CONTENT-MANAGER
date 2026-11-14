@@ -2,7 +2,7 @@
 
 **"An Application Control policy has blocked this file"** (Windows Smart App Control / WDAC)
 Windows refused to load an unsigned compiled file. Seen with SQLAlchemy 2.1's compiled extensions and with rollup/esbuild native binaries.
-RUHA is set up to avoid both: `requirements.txt` pins SQLAlchemy `<2.1`, and `frontend/package.json` uses the pure-JS/WebAssembly builds of rollup and esbuild
+El Ruach is set up to avoid both: `requirements.txt` pins SQLAlchemy `<2.1`, and `frontend/package.json` uses the pure-JS/WebAssembly builds of rollup and esbuild
 through npm `overrides`. If another package is blocked, install a pure-Python/WASM alternative or ask your administrator to allow it - do not disable the policy.
 
 **Ollama: "not running" in Processing Centre** - start Ollama, then `ollama pull qwen2.5:3b` (or run `pull_models.bat`). Transcription works without it, but

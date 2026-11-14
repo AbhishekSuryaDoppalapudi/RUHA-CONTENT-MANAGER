@@ -17,7 +17,7 @@ Legend: **T** = covered by the automated suite (67 tests, all passing; real FFmp
 | Ollama content planning (`qwen2.5:3b`) - quality of reel choices, JSON reliability | **U** (Ollama not installed on the dev machine; logic tested with a fake LLM, incl. retry, chunking, guards) |
 | Ollama embeddings (`nomic-embed-text`) | **U** (offline hashing embedder is tested and is the fallback) |
 | CUDA / GPU Whisper, NVENC encoding, VRAM readout | **U** (no NVIDIA GPU on the dev machine) |
-| Translator bridge against the real RUHA Video Translator models (Telugu etc.) | **U** (protocol tested with a stand-in `_translate_impl`; real IndicTrans2/Parler-TTS not run) |
+| Translator bridge against the real El Ruach Video Translator models (Telugu etc.) | **U** (protocol tested with a stand-in `_translate_impl`; real IndicTrans2/Parler-TTS not run) |
 | Intro/outro concatenation, watermark overlay, custom fonts, non-Latin poster text | **U** (code paths written; not exercised by tests) |
 | Poster/post rendering of Indic scripts (Pillow without Raqm shapes complex scripts imperfectly) | **U** - known limitation |
 | `install.bat` on a clean machine; portable-Node download inside it | **U** (the same steps were done manually) |

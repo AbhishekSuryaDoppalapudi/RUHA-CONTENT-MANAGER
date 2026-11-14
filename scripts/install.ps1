@@ -1,4 +1,4 @@
-# RUHA Manager - Windows installer. Run via install.bat (or: powershell -ExecutionPolicy Bypass -File scripts\install.ps1)
+# El Ruach Manager - Windows installer. Run via install.bat (or: powershell -ExecutionPolicy Bypass -File scripts\install.ps1)
 # Creates .venv, installs Python packages, builds the web UI, and reports what else is needed.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -44,7 +44,7 @@ Step 'Checking Ollama (local LLM)'
 if (Get-Command ollama -ErrorAction SilentlyContinue) { Ok 'Ollama found - run pull_models.bat to download the default model' }
 else { Warn 'Ollama not found. Install from https://ollama.com/download, then run pull_models.bat. Transcription works without it; content planning needs it.' }
 Step 'Checking GPU'
-if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { Ok ((& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader) -join '; ') } else { Warn 'No NVIDIA driver found - RUHA will use the CPU (slower).' }
+if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { Ok ((& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader) -join '; ') } else { Warn 'No NVIDIA driver found - El Ruach will use the CPU (slower).' }
 
 # ---------- Node (only to build the UI) ----------
 Step 'Preparing Node.js for the web UI build'
@@ -79,4 +79,4 @@ Ok 'UI built'
 if (-not (Test-Path '.env')) { Copy-Item '.env.example' '.env'; Ok 'Created .env from .env.example' }
 Step 'Self-check'
 & $vpy -c "from ruha.config import load_settings; from ruha.context import AppContext; c = AppContext(load_settings(start_worker=False) if False else load_settings()); print('database schema version', c.db.schema_version()); c.db.dispose()"
-Write-Host "`nInstallation complete. Start RUHA Manager with start.bat" -ForegroundColor Green
+Write-Host "`nInstallation complete. Start El Ruach Manager with start.bat" -ForegroundColor Green
