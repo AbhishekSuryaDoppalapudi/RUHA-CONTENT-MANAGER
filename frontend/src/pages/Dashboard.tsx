@@ -26,6 +26,9 @@ export default function Dashboard() {
   ] as const
   return (
     <>
+      <div className="rounded-2xl overflow-hidden border border-line/70 mb-6 shadow-glow">
+        <img src="/brand/el-ruach-banner.png" alt="El Ruach - The God's Breath" className="w-full max-h-48 object-cover object-center" />
+      </div>
       <PageHeader title="Dashboard" subtitle="Everything here is calculated from your real project data." />
       <section className="card p-4 mb-6">
         <p className="text-sm font-medium mb-3">Quick actions</p>

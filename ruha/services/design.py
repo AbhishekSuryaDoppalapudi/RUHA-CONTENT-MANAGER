@@ -6,9 +6,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+DEFAULT_MARK = Path(__file__).resolve().parents[1] / "assets" / "logo-mark.png"
+
 DEFAULT_BRAND = {
     "name": "El Ruach",
-    "tagline": "Create. Manage. Inspire.",
+    "tagline": "The God's Breath",
     "colors": {"background": "#0B1020", "background2": "#1B1646", "primary": "#7C3AED",
                "accent": "#22D3EE", "accent2": "#2DD4BF", "text": "#FFFFFF", "muted": "#B6BDD6"},
     "fonts": {"heading": None, "body": None},
@@ -169,14 +171,26 @@ def render_graphic(out, headline: str, body: str = "", reference: str = "", labe
             img.paste(lg, (int((w - lg.width) / 2) if align_center else pad, fy - 20), lg)
         except Exception:
             logo = None
+    tag_x = None
     if not (logo and Path(logo).exists()):
         nf = load_font(34, True, brand.get("name", ""), fonts.get("heading"))
         name = (brand.get("name") or "").upper()
-        d.text(((w - d.textlength(name, font=nf)) / 2 if align_center else pad, fy - 10), name, font=nf,
-               fill=text_color)
+        tw = d.textlength(name, font=nf)
+        mark_w = 0
+        if DEFAULT_MARK.exists():                       # the El Ruach "R" mark ships with the app
+            mk = Image.open(DEFAULT_MARK).convert("RGBA").resize((84, 84), Image.LANCZOS)
+            mark_w = 84 + 18
+            x0 = (w - (mark_w + tw)) / 2 if align_center else pad
+            img.paste(mk, (int(x0), fy - 22), mk)
+        else:
+            x0 = (w - tw) / 2 if align_center else pad
+        d.text((x0 + mark_w, fy - 10), name, font=nf, fill=text_color)
+        tag_x = x0 + mark_w
     tf = load_font(22, False, brand.get("tagline", ""), fonts.get("body"))
     tag = brand.get("tagline") or ""
-    d.text(((w - d.textlength(tag, font=tf)) / 2 if align_center else pad, fy + 38), tag, font=tf, fill=muted)
+    if tag_x is None:
+        tag_x = (w - d.textlength(tag, font=tf)) / 2 if align_center else pad
+    d.text((tag_x, fy + 38), tag, font=tf, fill=muted)
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
