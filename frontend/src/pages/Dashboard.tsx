@@ -4,6 +4,7 @@ import { Captions, Clapperboard, FileVideo, FolderPlus, Image as ImageIcon, Lang
 import { api } from '../api'
 import { Empty, ErrorBox, Loading, PageHeader, ProgressBar, StatusBadge, ago, fmtBytes, label, useApi } from '../ui'
 import { NewProjectModal, RunJobModal } from '../components/Dialogs'
+import ScrollBanner from '../components/ScrollBanner'
 
 type D = { metrics: Record<string, number>; processing: any; recent: any; review_queue: Record<string, number> }
 
@@ -26,9 +27,8 @@ export default function Dashboard() {
   ] as const
   return (
     <>
-      <div className="rounded-2xl overflow-hidden border border-line/70 mb-6 shadow-glow">
-        <img src="/brand/el-ruach-banner.png" alt="El Ruach - The God's Breath" className="w-full max-h-48 object-cover object-center" />
-      </div>
+      <ScrollBanner />
+      <div className="relative z-10">
       <PageHeader title="Dashboard" subtitle="Everything here is calculated from your real project data." />
       <section className="card p-4 mb-6">
         <p className="text-sm font-medium mb-3">Quick actions</p>
@@ -75,7 +75,8 @@ export default function Dashboard() {
             </div>)}
         </section>
       </div>
-      {(modal === 'new' || modal === 'upload') && <NewProjectModal onClose={() => { setModal(null); reload() }} withUpload />}
+      </div>
+      {(modal === 'new' || modal === 'upload') &&<NewProjectModal onClose={() => { setModal(null); reload() }} withUpload />}
       {(modal === 'generate' || modal === 'translate' || modal === 'reels' || modal === 'poster') && <RunJobModal mode={modal} onClose={() => { setModal(null); reload() }} />}
     </>
   )
