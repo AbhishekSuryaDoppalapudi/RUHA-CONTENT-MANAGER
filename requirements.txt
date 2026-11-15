@@ -9,6 +9,7 @@ psutil>=5.9
 requests>=2.32
 chromadb>=1.0
 faster-whisper>=1.1
+yt-dlp>=2024.8.6
 av==16.1.0                  # PyAV 19 removed an argument faster-whisper 1.2.x still passes (verified on real audio)
 # tests
 pytest>=8

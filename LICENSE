@@ -1,0 +1,23 @@
+El Ruach Manager - Proprietary Software License
+
+Copyright (c) 2026 Abhishek Surya Doppalapudi. All rights reserved.
+
+This software and its source code, documentation, designs, brand assets and
+generated templates (together, the "Software") are confidential and proprietary.
+No licence or right is granted except as set out below.
+
+You may NOT, without the prior written permission of the copyright holder:
+  1. copy, clone, fork, mirror or redistribute the Software or any part of it;
+  2. modify it or create derivative works;
+  3. publish, sell, sublicense, rent or lend it;
+  4. use it to build a competing product or service;
+  5. remove or alter this notice or any copyright notice.
+
+The copyright holder and people they authorise in writing may use and modify the
+Software for the holder's own purposes.
+
+Third-party components (for example FastAPI, React, faster-whisper, Ollama and
+ChromaDB) remain under their own open-source licences, which are not changed by
+this notice.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

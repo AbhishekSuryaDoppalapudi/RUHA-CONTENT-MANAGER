@@ -48,9 +48,9 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
   }
   const toCalendar = () => run('cal', () => api.post('/api/calendar', { title: a!.title || KIND_LABEL[a!.kind], asset_id: a!.id, scheduled_for: new Date(Date.now() + 864e5).toISOString().slice(0, 16) + ':00' }), 'Added to the calendar as a draft')
 
-  const isReel = a?.kind === 'main_reel' || a?.kind === 'short_reel'
+  const isReel = a?.kind === 'main_reel' || a?.kind === 'short_reel' || a?.kind === 'image_reel'
   const isGraphic = a?.kind === 'poster' || a?.kind === 'social_post'
-  const reviewable = a && ['main_reel', 'short_reel', 'poster', 'social_post'].includes(a.kind)
+  const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post'].includes(a.kind)
 
   return (
     <Modal title={a ? `${KIND_LABEL[a.kind] || label(a.kind)} · ${a.slot || ''}` : 'Asset'} onClose={onClose} width="max-w-5xl">

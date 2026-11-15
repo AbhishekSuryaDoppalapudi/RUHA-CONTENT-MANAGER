@@ -3,8 +3,10 @@ and skipped when the job runs again, so a failure never discards completed work.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
+import time
 from pathlib import Path
 
 from ruha.config import QUALITY_CRF
@@ -12,9 +14,10 @@ from ruha.models import (GeneratedAsset, Poster, Project, Reel, SocialPost, Subt
                          TranscriptSegment, Translation)
 from ruha.services import assets as asset_svc
 from ruha.services import brand as brand_svc
-from ruha.services import media, planner, projects
-from ruha.services.design import render_graphic
-from ruha.services.subtitles import build_srt, full_srt
+from ruha.services import media, planner, projects, themes
+from ruha.services.design import render_card, render_graphic
+log = logging.getLogger("ruha.handlers")
+from ruha.services.subtitles import build_cues, build_srt, cues_to_srt, full_srt
 
 PRESETS = {"draft": "ultrafast", "balanced": "veryfast", "high": "medium"}
 
@@ -28,6 +31,8 @@ def register(queue):
         "video_rendering": h_render,
         "translation": h_translate,
         "dubbing": h_translate,
+        "video_download": h_download,
+        "image_reel": h_image_reel,
     })
 
 
@@ -60,8 +65,11 @@ def ensure_plan(app, jc, force: bool = False):
     t = _latest_transcript(app, jc.project_id)
     if t is None:
         raise RuntimeError("No transcript yet - run transcription first")
-    if t["plan"] and not force:
-        return t["plan"], t["id"]
+    stored = t["plan"] or {}
+    current = bool(stored.get("visual_theme")) and len(stored.get("main_reels", [])) == planner.N_MAIN \
+        and len(stored.get("short_reels", [])) == planner.N_SHORT        # plans from older versions are redone
+    if stored and current and not force:
+        return stored, t["id"]
     segs = _segments(app, t["id"])
     proj = _load_project(app, jc.project_id)
     duration = max((proj["video"] or {}).get("duration") or 0, segs[-1]["end"] if segs else 0)
@@ -104,9 +112,208 @@ def _excerpt(segs, a, b) -> str:
     return " ".join(x["text"] for x in segs if x["end"] > a and x["start"] < b)
 
 
-def _brand_for_design(brand: dict) -> dict:
-    return {"name": brand["name"], "tagline": brand["tagline"], "colors": brand["colors"],
-            "fonts": brand["fonts"], "logo": brand["logo"]}
+def _brand_for_design(brand: dict, app=None, ws=None, theme=None, topic: str = "") -> dict:
+    """Brand fields for the renderers, plus the render engine and (optionally) an AI-generated background."""
+    bd = {"name": brand["name"], "tagline": brand["tagline"], "colors": brand["colors"],
+          "fonts": brand["fonts"], "logo": brand["logo"]}
+    if app is not None:
+        bd["engine"] = app.config.get("design.engine", "html")
+        if theme and ws is not None and app.config.get("design.ai_background", False):
+            bd["background"] = _ai_background(app, Path(ws), theme, topic)
+    return bd
+
+
+def _ai_background(app, ws: Path, theme: str, topic: str = "") -> str | None:
+    """One AI background per project and theme (cached on disk). None -> the built-in themed background."""
+    out = ws / "backgrounds" / f"{theme}.png"
+    if out.exists():
+        return str(out)
+    gen = getattr(app.services, "imagegen", None)
+    if gen is None:
+        return None
+    failed = app.__dict__.setdefault("_bg_failed", {})
+    if time.time() - failed.get(str(out), 0) < 900:          # do not reload a model that just failed, for 15 min
+        return None
+    try:
+        from ruha.ai import imagegen
+        with app.model_lock:                                  # one heavy GPU model at a time
+            gen.generate(imagegen.prompt_for(theme, topic), out, app.config.all())
+        return str(out)
+    except Exception as e:
+        failed[str(out)] = time.time()
+        log.warning("AI background unavailable (%s); using the built-in themed background", e)
+        return None
+
+
+# ----------------------------- themes, language, cards ------------------------
+LANG_CODES = {"English": "en", "Hindi": "hi", "Telugu": "te", "Tamil": "ta", "Kannada": "kn", "Malayalam": "ml",
+              "Marathi": "mr", "Bengali": "bn", "Gujarati": "gu", "Punjabi": "pa", "Urdu": "ur", "Odia": "or",
+              "Assamese": "as", "Nepali": "ne", "Sanskrit": "sa"}
+
+
+def _theme_for(app, jc, plan) -> str | None:
+    if not jc.cfg.get("design.theme_backgrounds", True):
+        return None
+    return plan.get("visual_theme") or themes.resolve(None, plan.get("main_theme", "") + " " + plan.get("summary", ""))
+
+
+def _theme_accent(theme) -> str:
+    return (themes.THEMES.get(theme) or themes.THEMES[themes.DEFAULT])["accent"]
+
+
+def _translate_lines(app, jc, lines: list, language: str) -> list:
+    """Translate subtitle lines with the local LLM; any batch that fails keeps the original text."""
+    out = list(lines)
+    for i in range(0, len(lines), 20):
+        batch = lines[i:i + 20]
+        prompt = (f"Translate each of these subtitle lines into {language}. Keep the meaning, keep them short and "
+                  "natural, do not add or remove lines. Return ONLY JSON like {\"lines\":[\"...\"]} with exactly "
+                  f"{len(batch)} items.\n" + json.dumps(batch, ensure_ascii=False))
+        try:
+            with app.model_lock:
+                res = app.services.llm.generate_json(prompt, jc.cfg)
+            got = [str(x).strip() for x in (res.get("lines") or [])]
+            if len(got) == len(batch) and all(got):
+                out[i:i + 20] = got
+            else:
+                jc.log(f"Subtitle translation to {language} returned {len(got)} of {len(batch)} lines; kept original", "WARNING")
+        except Exception as e:
+            jc.log(f"Subtitle translation to {language} failed ({e}); kept original text", "WARNING")
+    return out
+
+
+def _localized_cues(app, jc, segs, start, end, source_lang, style) -> tuple:
+    """Subtitle cues for [start, end] in the requested language (default English). Returns (cues, language)."""
+    language = jc.params.get("language") or jc.cfg.get("subtitle.language") or "English"
+    cues = build_cues(segs, start, end, int(style.get("max_chars_per_line", 24)))
+    code = LANG_CODES.get(language, "")
+    if cues and code and (source_lang or "").lower()[:2] != code:
+        texts = _translate_lines(app, jc, [c[2].replace("\n", " ") for c in cues], language)
+        cues = [(a, b, t) for (a, b, _), t in zip(cues, texts)]
+    return cues, language
+
+
+def _card_size(jc) -> tuple:
+    return int(jc.cfg.get("render.width", 1080)), int(jc.cfg.get("render.height", 1920))
+
+
+def _reel_cards(app, jc, ws, slot, clip, plan, theme, brand, version=1):
+    """Render the opening hook image and the closing image for a reel (None when disabled)."""
+    if not theme:
+        return None, None
+    bd = _brand_for_design(brand, app, ws, theme, plan.get("main_theme", ""))
+    verse = (plan.get("poster") or {}).get("subheadline", "")
+    op = cl = None
+    if jc.cfg.get("reel.hook_card", True):
+        op = render_card(ws / "cards" / f"{slot}_open_v{version}.png", clip.get("hook") or plan.get("title", ""),
+                         theme, bd, "open", verse, size=_card_size(jc))
+    if jc.cfg.get("reel.closing_card", True):
+        cl = render_card(ws / "cards" / f"{slot}_close_v{version}.png", "", theme, bd, "close", verse,
+                         clip.get("closing") or "Follow for more", size=_card_size(jc))
+    return op, cl
+
+
+# ----------------------------- reel from uploaded images -----------------------
+def h_image_reel(app, jc):
+    """Make a reel from pictures uploaded to the project: hook card, zoomed images with captions, closing card."""
+    with app.db.session() as s:
+        p = s.get(Project, jc.project_id)
+        if p is None:
+            raise LookupError("Project no longer exists")
+        ws, pname = Path(p.workspace_dir), p.name
+    img_dir = ws / "images"
+    names = list(jc.params.get("images") or [])
+    if not names and img_dir.exists():
+        names = sorted(f.name for f in img_dir.glob("*") if f.is_file())
+    files = [img_dir / n for n in names if Path(str(n)).name == str(n) and (img_dir / n).is_file()]   # no path tricks
+    if not files:
+        raise RuntimeError("Upload at least one image first")
+    seconds = max(1.5, min(12.0, float(jc.params.get("seconds_per_image", 3.5))))
+    hook = (jc.params.get("hook") or "").strip() or pname
+    closing = (jc.params.get("closing") or "").strip() or "Follow for more"
+    captions = [str(c).strip() for c in (jc.params.get("captions") or [])]
+    language = jc.params.get("language") or jc.cfg.get("subtitle.language") or "English"
+    verse = (jc.params.get("verse") or "").strip()
+    t = _latest_transcript(app, jc.project_id)
+    plan = (t or {}).get("plan") or {}
+    theme = jc.params.get("theme")
+    if theme not in themes.THEMES:
+        theme = plan.get("visual_theme") or themes.resolve(None, f"{hook} {' '.join(captions)}")
+    if language != "English" and any(captions):
+        shown = [c for c in captions if c]
+        tr = iter(_translate_lines(app, jc, shown, language))
+        captions = [next(tr) if c else "" for c in captions]
+    cues = [(i * seconds + 0.2, (i + 1) * seconds - 0.2, c) for i, c in enumerate(captions[:len(files)]) if c]
+    brand = brand_svc.get_brand(app)
+    args = _render_args(app, jc)
+    bd = _brand_for_design(brand, app, ws, theme, hook)
+    size = _card_size(jc)
+    n = 1
+    with app.db.session() as s:
+        n = s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="image_reel").count() + 1
+    slot = f"image_{n}"
+    jc.progress(0.1, "Designing hook and closing images", force=True)
+    op = render_card(ws / "cards" / f"{slot}_open.png", hook, theme, bd, "open", verse, size=size) \
+        if jc.cfg.get("reel.hook_card", True) else None
+    cl = render_card(ws / "cards" / f"{slot}_close.png", "", theme, bd, "close", verse, closing, size=size) \
+        if jc.cfg.get("reel.closing_card", True) else None
+    out = ws / "reels" / f"{slot}_v1.mp4"
+    jc.progress(0.25, "Rendering reel from images", force=True)
+    wm = brand["watermark"] if jc.cfg.get("render.apply_watermark", True) else None
+    media.render_image_reel(files, out, seconds_per_image=seconds, width=args["width"], height=args["height"],
+                            crf=args["crf"], preset=args["preset"], cues=cues, accent=_theme_accent(theme),
+                            subtitle_style=args["subtitle_style"], open_card=op, close_card=cl, watermark=wm,
+                            music=jc.cfg.get("reel.music_path") or None)
+    srt = cues_to_srt(cues, ws / "subtitles" / f"{slot}_v1.srt")
+    thumb = media.make_thumbnail(out, ws / "thumbs" / f"{slot}.jpg", at=min(1.0, seconds / 2))
+    with app.db.session() as s:
+        sa = asset_svc.register(app, s, jc.project_id, "subtitle", srt, slot=f"{slot}_srt",
+                                title=f"Captions - {slot}", job_id=jc.job_id, meta={"language": language})
+        a = asset_svc.register(app, s, jc.project_id, "image_reel", out, slot=slot, title=hook[:200],
+                               description=f"Reel made from {len(files)} image(s)", caption=jc.params.get("caption", ""),
+                               hashtags=list(plan.get("hashtags", []))[:8], job_id=jc.job_id, preview_path=thumb,
+                               meta={"images": [f.name for f in files], "seconds_per_image": seconds,
+                                     "visual_theme": theme, "language": language, "closing": closing,
+                                     "duration": round(seconds * len(files), 2), "width": args["width"],
+                                     "height": args["height"]})
+        s.add(Subtitle(project_id=jc.project_id, asset_id=sa.id, language=language, path=str(srt)))
+        aid = a.id
+    try:
+        app.memory.index_asset(aid)
+    except Exception:
+        pass
+    jc.progress(1.0, "Image reel ready", force=True)
+    return {"asset_id": aid, "slot": slot}
+
+
+# ----------------------------- download from a link --------------------------
+def h_download(app, jc):
+    from ruha.ai import ytdl
+    url = jc.params.get("url", "")
+    with app.db.session() as s:
+        if projects.current_video(s, jc.project_id):
+            jc.log("Project already has a video - skipping download")
+            return
+    jc.progress(0.02, "Downloading video", force=True)
+    tmp_dir = app.settings.tmp_dir / f"dl_{jc.job_id}"
+    try:
+        path, title = ytdl.download(url, tmp_dir, int(jc.cfg.get("download.max_height", 720)),
+                                    progress=lambda f: jc.progress(0.02 + f * 0.9, "Downloading video"))
+    except ytdl.DownloadError as e:
+        raise RuntimeError(str(e))
+    jc.progress(0.95, "Checking the video", force=True)
+    with app.db.session() as s:
+        p = s.get(Project, jc.project_id)
+        if p is None:
+            raise LookupError("Project no longer exists")
+        projects.attach_video(app, s, p, path, f"{title[:120]}{path.suffix}")
+        if jc.params.get("rename"):
+            p.name = title[:200]
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    jc.log(f"Downloaded '{title}'")
+    if jc.params.get("process", True):
+        app.queue.enqueue_pipeline(jc.project_id, language=jc.params.get("language"))
+        jc.log("Queued transcription and content generation")
 
 
 # ----------------------------- transcription ---------------------------------
@@ -208,8 +415,9 @@ def h_reels(app, jc):
     if not v or not v["path"].exists():
         raise RuntimeError("Source video file is missing")
     segs = _segments(app, tid)
-    brand, extras = _brand_for_render(app, jc)
+    brand_data, extras = _brand_for_render(app, jc)
     args = _render_args(app, jc)
+    src_lang = (_latest_transcript(app, jc.project_id) or {}).get("language")
     force = bool(jc.params.get("force"))
     slots = [(f"main_{i}", "main", c) for i, c in enumerate(plan["main_reels"], 1)] + \
             [(f"short_{i}", "short", c) for i, c in enumerate(plan["short_reels"], 1)]
@@ -223,9 +431,12 @@ def h_reels(app, jc):
             continue
         jc.progress(n / len(slots), f"Rendering {slot}", force=True)
         out = proj["ws"] / "reels" / f"{slot}_v1.mp4"
-        media.render_reel(v["path"], clip["start"], clip["end"], out, segments=segs, **args, **extras)
-        srt = build_srt(segs, clip["start"], clip["end"], proj["ws"] / "subtitles" / f"{slot}_v1.srt",
-                        max_chars=int(args["subtitle_style"].get("max_chars_per_line", 28)))
+        theme = _theme_for(app, jc, plan)
+        cues, language = _localized_cues(app, jc, segs, clip["start"], clip["end"], src_lang, args["subtitle_style"])
+        op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data)
+        media.render_reel(v["path"], clip["start"], clip["end"], out, segments=segs, cues=cues, open_card=op,
+                          close_card=cl, accent=_theme_accent(theme), **args, **extras)
+        srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v1.srt")
         thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}.jpg", at=min(1.0, (clip["end"] - clip["start"]) / 2))
         with app.db.session() as s:
             if force:
@@ -236,18 +447,21 @@ def h_reels(app, jc):
                 s.flush()
             sa = asset_svc.register(app, s, jc.project_id, "subtitle", srt, slot=f"{slot}_srt",
                                     title=f"Subtitles - {slot}", video_id=v["id"], job_id=jc.job_id,
-                                    meta={"start": clip["start"], "end": clip["end"]})
+                                    meta={"start": clip["start"], "end": clip["end"], "language": language})
             a = asset_svc.register(
                 app, s, jc.project_id, "main_reel" if cat == "main" else "short_reel", out, slot=slot,
                 title=clip["hook"][:200] or f"{plan['title']} - {slot}", description=clip["reason"],
                 caption=clip["caption"], hashtags=clip["hashtags"], video_id=v["id"], job_id=jc.job_id,
                 preview_path=thumb, meta={"start": clip["start"], "end": clip["end"],
                                           "duration": round(clip["end"] - clip["start"], 2),
-                                          "width": args["width"], "height": args["height"]})
+                                          "width": args["width"], "height": args["height"],
+                                          "visual_theme": theme, "closing": clip.get("closing", ""),
+                                          "language": language, "has_hook_card": bool(op),
+                                          "has_closing_card": bool(cl)})
             s.add(Reel(asset_id=a.id, category=cat, start_s=clip["start"], end_s=clip["end"], hook=clip["hook"],
                        reason=clip["reason"], transcript_excerpt=_excerpt(segs, clip["start"], clip["end"]),
                        subtitle_asset_id=sa.id))
-            s.add(Subtitle(project_id=jc.project_id, asset_id=sa.id, language="original", path=str(srt)))
+            s.add(Subtitle(project_id=jc.project_id, asset_id=sa.id, language=language, path=str(srt)))
             aid = a.id
         app.memory.index_asset(aid)
         done.append(slot)
@@ -281,13 +495,14 @@ def h_poster(app, jc):
     p = plan["poster"]
     out = _poster_file(proj["ws"], "poster", 1)
     size = tuple(brand["export"]["poster"])
-    render_graphic(out, p["headline"], p["quote"] or p["subheadline"], "", "Highlight", "poster",
-                   _brand_for_design(brand), layout, size)
+    theme = _theme_for(app, jc, plan)
+    render_graphic(out, p["headline"], p["quote"], p["subheadline"], "Highlight", "poster",
+                   _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", "")), layout, size, theme=theme)
     with app.db.session() as s:
         a = asset_svc.register(app, s, jc.project_id, "poster", out, slot="poster", title=p["headline"][:200],
                                description=p["subheadline"], caption=p["quote"], hashtags=plan["hashtags"][:8],
                                job_id=jc.job_id, preview_path=out,
-                               meta={"layout": layout, "template_id": tpl, "size": list(size)})
+                               meta={"layout": layout, "template_id": tpl, "size": list(size), "visual_theme": theme})
         s.add(Poster(asset_id=a.id, headline=p["headline"], subheadline=p["subheadline"], quote=p["quote"],
                      theme=p["theme"], template_id=tpl))
         aid = a.id
@@ -322,13 +537,14 @@ def h_social(app, jc):
             layout, tpl = brand_svc.layout_for(s, "social", i)
         out = proj["ws"] / "social" / f"{slot}_v1.png"
         size = tuple(brand["export"]["social"])
+        theme = _theme_for(app, jc, plan)
         render_graphic(out, post["headline"], post["body"], post["reference"], "Encouragement", "social",
-                       _brand_for_design(brand), layout, size)
+                       _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", "")), layout, size, theme=theme)
         with app.db.session() as s:
             a = asset_svc.register(app, s, jc.project_id, "social_post", out, slot=slot, title=post["headline"][:200],
                                    caption=post["caption"], hashtags=plan["hashtags"][:8], job_id=jc.job_id,
                                    preview_path=out, meta={"layout": layout, "template_id": tpl, "size": list(size),
-                                                           "similar_to": similar})
+                                                           "similar_to": similar, "visual_theme": theme})
             s.add(SocialPost(asset_id=a.id, headline=post["headline"], body=post["body"],
                              reference=post["reference"], template_id=tpl))
             aid = a.id
@@ -396,7 +612,7 @@ def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str 
         ws = Path(a.file_path).parent.parent
         if a.kind == "poster":
             r = s.query(Poster).filter_by(asset_id=a.id).first()
-            head, body, ref, label, kind = r.headline, r.quote or r.subheadline, "", "Highlight", "poster"
+            head, body, ref, label, kind = r.headline, r.quote, r.subheadline, "Highlight", "poster"
             folder = "posters"
         else:
             r = s.query(SocialPost).filter_by(asset_id=a.id).first()
@@ -405,7 +621,11 @@ def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str 
         layout = layout or meta.get("layout", "classic")
         size = tuple(meta.get("size") or brand["export"][kind])
         out = ws / folder / f"{a.slot}_v{a.version + 1}.png"
-        render_graphic(out, head, body, ref, label, kind, _brand_for_design(brand), layout, size)
+        theme = meta.get("visual_theme")
+        if theme is None and app.config.get("design.theme_backgrounds", True):
+            theme = themes.resolve(None, f"{head} {body}")
+        render_graphic(out, head, body, ref, label, kind, _brand_for_design(brand, app, ws, theme, head), layout, size,
+                       theme=theme)
         meta["layout"] = layout
         asset_svc.replace_file(app, s, a, out, reason, meta=meta)
         a.preview_path = str(out)
@@ -433,13 +653,22 @@ def h_render(app, jc):
     segs = _segments(app, t["id"]) if t else []
     if end - start < 3 or start < 0 or (v["duration"] and end > v["duration"] + 0.5):
         raise RuntimeError("Invalid start/end for this video")
-    brand, extras = _brand_for_render(app, jc)
+    brand_data, extras = _brand_for_render(app, jc)
     args = _render_args(app, jc)
     jc.progress(0.1, "Rendering reel", force=True)
     out = proj["ws"] / "reels" / f"{slot}_v{version + 1}.mp4"
-    media.render_reel(v["path"], start, end, out, segments=segs, **args, **extras)
-    srt = build_srt(segs, start, end, proj["ws"] / "subtitles" / f"{slot}_v{version + 1}.srt",
-                    max_chars=int(args["subtitle_style"].get("max_chars_per_line", 28)))
+    plan = (t or {}).get("plan") or {}
+    with app.db.session() as s:
+        meta0 = dict(s.get(GeneratedAsset, asset_id).meta)
+        rr = s.query(Reel).filter_by(asset_id=asset_id).first()
+        hook0 = rr.hook if rr else ""
+    theme = _theme_for(app, jc, plan) if plan else None
+    clip = {"hook": hook0, "closing": meta0.get("closing", "")}
+    cues, language = _localized_cues(app, jc, segs, start, end, (t or {}).get("language"), args["subtitle_style"])
+    op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data, version + 1)
+    media.render_reel(v["path"], start, end, out, segments=segs, cues=cues, open_card=op, close_card=cl,
+                      accent=_theme_accent(theme), **args, **extras)
+    srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v{version + 1}.srt")
     thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}_v{version + 1}.jpg", at=1.0)
     with app.db.session() as s:
         a = s.get(GeneratedAsset, asset_id)

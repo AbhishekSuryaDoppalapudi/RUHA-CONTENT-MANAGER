@@ -1,16 +1,16 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Captions, Clapperboard, FileVideo, FolderPlus, Image as ImageIcon, Languages, Library, Sparkles, Upload, XCircle } from 'lucide-react'
+import { Captions, Clapperboard, FileVideo, FolderPlus, Image as ImageIcon, Languages, Library, Link2, Sparkles, Upload, XCircle } from 'lucide-react'
 import { api } from '../api'
 import { Empty, ErrorBox, Loading, PageHeader, ProgressBar, StatusBadge, ago, fmtBytes, label, useApi } from '../ui'
-import { NewProjectModal, RunJobModal } from '../components/Dialogs'
+import { ImportLinkModal, NewProjectModal, RunJobModal } from '../components/Dialogs'
 import ScrollBanner from '../components/ScrollBanner'
 
 type D = { metrics: Record<string, number>; processing: any; recent: any; review_queue: Record<string, number> }
 
 export default function Dashboard() {
   const { data, error, loading, reload } = useApi(() => api.get<D>('/api/dashboard'), [], 5000)
-  const [modal, setModal] = useState<null | 'new' | 'upload' | 'generate' | 'translate' | 'reels' | 'poster'>(null)
+  const [modal, setModal] = useState<null | 'new' | 'link' | 'upload' | 'generate' | 'translate' | 'reels' | 'poster'>(null)
   if (loading && !data) return <Loading rows={4} />
   if (error && !data) return <ErrorBox error={error} retry={reload} />
   const m = data!.metrics, p = data!.processing, r = data!.recent
@@ -22,7 +22,7 @@ export default function Dashboard() {
     ['Processing jobs', m.processing_jobs, 'text-accent'], ['Failed jobs', m.failed_jobs, m.failed_jobs ? 'text-danger' : 'text-muted'],
   ]
   const actions = [
-    { l: 'New project', i: FolderPlus, k: 'new' }, { l: 'Upload video', i: Upload, k: 'upload' }, { l: 'Generate content', i: Sparkles, k: 'generate' },
+    { l: 'New project', i: FolderPlus, k: 'new' }, { l: 'Paste video link', i: Link2, k: 'link' }, { l: 'Upload video', i: Upload, k: 'upload' }, { l: 'Generate content', i: Sparkles, k: 'generate' },
     { l: 'Translate video', i: Languages, k: 'translate' }, { l: 'Create reels', i: Clapperboard, k: 'reels' }, { l: 'Create poster', i: ImageIcon, k: 'poster' },
   ] as const
   return (
@@ -32,7 +32,7 @@ export default function Dashboard() {
       <PageHeader title="Dashboard" subtitle="Everything here is calculated from your real project data." />
       <section className="card p-4 mb-6">
         <p className="text-sm font-medium mb-3">Quick actions</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
           {actions.map(({ l, i: I, k }) => (
             <button key={k} className="btn-ghost flex-col !py-4 gap-1.5 hover:border-accent/60 hover:shadow-glow" onClick={() => setModal(k)}><I size={20} className="text-accent" />{l}</button>))}
           <Link to="/library" className="btn-ghost flex-col !py-4 gap-1.5 hover:border-accent/60 hover:shadow-glow"><Library size={20} className="text-accent" />Open library</Link>
@@ -76,6 +76,7 @@ export default function Dashboard() {
         </section>
       </div>
       </div>
+      {modal === 'link' && <ImportLinkModal onClose={() => { setModal(null); reload() }} />}
       {(modal === 'new' || modal === 'upload') &&<NewProjectModal onClose={() => { setModal(null); reload() }} withUpload />}
       {(modal === 'generate' || modal === 'translate' || modal === 'reels' || modal === 'poster') && <RunJobModal mode={modal} onClose={() => { setModal(null); reload() }} />}
     </>

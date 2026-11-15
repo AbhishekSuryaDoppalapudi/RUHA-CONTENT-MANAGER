@@ -1,0 +1,8 @@
+# Optional: AI-generated poster backgrounds (needs an NVIDIA GPU, ~8 GB VRAM or more).
+# Install the CUDA build of torch first (see https://pytorch.org/get-started/locally/), then:
+#   .venv\Scripts\python.exe -m pip install -r requirements-gpu.txt
+# Turn it on in Settings > Design > "AI-generated backgrounds". The model downloads once (~7 GB) and then runs offline.
+diffusers>=0.30
+transformers>=4.44
+accelerate>=0.33
+safetensors>=0.4

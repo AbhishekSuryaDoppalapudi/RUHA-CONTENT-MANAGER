@@ -35,6 +35,7 @@ class ProjectPatch(BaseModel):
 class ProcessIn(BaseModel):
     steps: list | None = None
     translations: list = []
+    language: str | None = None          # subtitle language for the reels (default English)
 
 
 class JobIn(BaseModel):
@@ -203,6 +204,97 @@ def upload_video(pid: int, file: UploadFile = File(...), replace: bool = Form(Fa
         return {"video": svc.video_dict(v), "duplicates": dups}
 
 
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
+
+def _image_files(ws: Path | None) -> list:
+    d = (ws / "images") if ws else None
+    return sorted(f for f in d.glob("*") if f.is_file() and f.suffix.lower() in IMAGE_EXTS) if d and d.exists() else []
+
+
+@router.get("/projects/{pid}/images")
+def list_images(pid: int, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        return [{"name": f.name, "size": f.stat().st_size} for f in _image_files(Path(p.workspace_dir))]
+
+
+@router.post("/projects/{pid}/images", status_code=201)
+def upload_images(pid: int, files: list[UploadFile] = File(...), ctx=Depends(app_ctx)):
+    from PIL import Image, UnidentifiedImageError
+    from ruha.security import sanitize_filename
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        d = Path(p.workspace_dir) / "images"
+    d.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for f in files:
+        name = sanitize_filename(f.filename or "image.jpg", "image.jpg")
+        if Path(name).suffix.lower() not in IMAGE_EXTS:
+            raise HTTPException(400, f"'{name}' is not a supported image (use JPG, PNG or WEBP)")
+        data = f.file.read(MAX_IMAGE_BYTES + 1)
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(400, f"'{name}' is empty or larger than 25 MB")
+        dest, n = d / name, 1
+        while dest.exists():
+            dest = d / f"{Path(name).stem}_{n}{Path(name).suffix}"
+            n += 1
+        dest.write_bytes(data)
+        try:
+            with Image.open(dest) as im:
+                im.verify()
+        except (UnidentifiedImageError, OSError):
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, f"'{name}' is not a valid image")
+        saved.append(dest.name)
+    return {"saved": saved}
+
+
+@router.get("/projects/{pid}/images/{name}")
+def get_image(pid: int, name: str, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        path = Path(p.workspace_dir) / "images" / Path(name).name
+    return file_response(ctx, str(path))
+
+
+@router.delete("/projects/{pid}/images/{name}")
+def delete_image(pid: int, name: str, ctx=Depends(app_ctx)):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        path = Path(p.workspace_dir) / "images" / Path(name).name
+    if not path.is_file():
+        raise HTTPException(404, "Image not found")
+    path.unlink()
+    return {"deleted": name}
+
+
+class ImportUrlIn(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    name: str = ""
+    content_type: str = "sermon"
+    process: bool = True
+    language: str | None = None
+
+
+@router.post("/import-url", status_code=202)
+def import_url(body: ImportUrlIn, ctx=Depends(app_ctx)):
+    """Create a project from a video link: download it, then run the full content pipeline."""
+    from ruha.ai import ytdl
+    try:
+        url = ytdl.validate_url(body.url)
+    except ytdl.DownloadError as e:
+        raise HTTPException(400, str(e))
+    with ctx.db.session() as s:
+        p = svc.create(ctx, s, body.name.strip() or "Imported video", f"Imported from {url}", body.content_type, [])
+        s.flush()
+        pid = p.id
+    jid = ctx.queue.enqueue("video_download", pid, {"url": url, "process": body.process, "language": body.language,
+                                                    "rename": not body.name.strip()})
+    return {"project_id": pid, "job_id": jid}
+
+
 @router.delete("/videos/{vid}")
 def delete_video(vid: int, confirm: bool = Query(False), ctx=Depends(app_ctx)):
     if not confirm:
@@ -246,7 +338,7 @@ def process(pid: int, body: ProcessIn | None = None, ctx=Depends(app_ctx)):
         get_or_404(s, Project, pid, "Project")
         if not svc.current_video(s, pid):
             raise HTTPException(400, "Upload a video before processing")
-    ids = ctx.queue.enqueue_pipeline(pid, body.steps, body.translations)
+    ids = ctx.queue.enqueue_pipeline(pid, body.steps, body.translations, body.language)
     return {"job_ids": ids}
 
 
@@ -256,8 +348,10 @@ def create_job(pid: int, body: JobIn, ctx=Depends(app_ctx)):
         raise HTTPException(400, f"job_type must be one of {JOB_TYPES}")
     with ctx.db.session() as s:
         get_or_404(s, Project, pid, "Project")
-        if body.job_type != "video_rendering" and not svc.current_video(s, pid):
+        if body.job_type not in ("video_rendering", "image_reel") and not svc.current_video(s, pid):
             raise HTTPException(400, "Upload a video first")
+        if body.job_type == "image_reel" and not _image_files(Path(p0.workspace_dir) if (p0 := s.get(Project, pid)) else None):
+            raise HTTPException(400, "Upload at least one image first")
     return {"job_id": ctx.queue.enqueue(body.job_type, pid, body.params)}
 
 

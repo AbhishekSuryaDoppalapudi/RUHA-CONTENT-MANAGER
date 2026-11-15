@@ -109,9 +109,17 @@ DEFAULT_CONFIG: dict = {
     "render.apply_watermark": {"category": "export", "value": True},
     "render.apply_intro_outro": {"category": "export", "value": True},
     "subtitle.style": {"category": "subtitles", "value": {
-        "font": "Arial", "size": 64, "bold": True, "primary": "#FFFFFF",
-        "outline_color": "#000000", "outline": 4, "margin_v": 260,
-        "max_chars_per_line": 28}},
+        "creative": True, "font": "Segoe UI Black", "indic_font": "Nirmala UI", "size": 78, "bold": True,
+        "primary": "#FFFFFF", "outline_color": "#000000", "outline": 4, "margin_v": 300,
+        "max_chars_per_line": 24}},
+    "subtitle.language": {"category": "subtitles", "value": "English"},   # reel subtitle language (default English)
+    "reel.music_path": {"category": "export", "value": ""},                 # optional music for image reels
+    "reel.hook_card": {"category": "export", "value": True},               # opening hook image
+    "reel.closing_card": {"category": "export", "value": True},            # closing image
+    "design.engine": {"category": "design", "value": "html"},              # html (browser, best quality) | pillow
+    "design.ai_background": {"category": "design", "value": False},        # needs NVIDIA GPU + requirements-gpu.txt
+    "design.ai_model": {"category": "design", "value": "stabilityai/sdxl-turbo"},
+    "design.theme_backgrounds": {"category": "design", "value": True},     # theme-matched poster/post backgrounds
     "queue.paused": {"category": "queue", "value": False},
     "app.theme": {"category": "app", "value": "dark"},
     "app.owner_name": {"category": "app", "value": "Owner"},
@@ -125,9 +133,9 @@ PROJECT_STATUSES = ["draft", "uploaded", "processing", "review_required", "appro
                     "published", "failed", "archived"]
 ASSET_STATUSES = ["draft", "approved", "rejected", "revision_requested"]
 ASSET_KINDS = ["main_reel", "short_reel", "poster", "social_post", "subtitle", "transcript",
-               "caption", "translation_video", "translation_subtitle", "audio", "video"]
+               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel"]
 JOB_TYPES = ["transcription", "translation", "dubbing", "reel_generation", "poster_generation",
-             "social_post_generation", "video_rendering"]
+             "social_post_generation", "video_rendering", "video_download", "image_reel"]
 JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled"]
 CALENDAR_STATUSES = ["draft", "approved", "scheduled", "published"]
 

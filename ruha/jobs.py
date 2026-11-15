@@ -93,12 +93,14 @@ class JobQueue:
         self._wake.set()
         return jid
 
-    def enqueue_pipeline(self, project_id: int, steps: list | None = None, translations: list | None = None) -> list:
+    def enqueue_pipeline(self, project_id: int, steps: list | None = None, translations: list | None = None,
+                         language: str | None = None) -> list:
         """Chain jobs so each starts only after the previous one completed."""
         steps = steps or PIPELINE
         ids, prev = [], None
         for st in steps:
-            prev = self.enqueue(st, project_id, {}, depends_on=prev)
+            prev = self.enqueue(st, project_id, {"language": language} if language and st == "reel_generation" else {},
+                                depends_on=prev)
             ids.append(prev)
         for tr in translations or []:
             prev_t = self.enqueue("dubbing" if tr.get("dub") else "translation", project_id, tr, depends_on=ids[0] if ids else None)
@@ -258,7 +260,11 @@ class JobQueue:
         if p is None or p.status in ("archived", "published"):
             return
         s.flush()
-        states = [st for st, in s.query(ProcessingJob.status).filter_by(project_id=project_id)]
+        latest: dict = {}                                   # a failure is resolved once a newer job of that type ran
+        for _id, jt, st in s.query(ProcessingJob.id, ProcessingJob.job_type, ProcessingJob.status) \
+                .filter_by(project_id=project_id).order_by(ProcessingJob.id):
+            latest[jt] = st
+        states = list(latest.values())
         if any(st in ("queued", "running") for st in states):
             p.status = "processing"
         elif states and p.status in ("processing", "failed", "uploaded", "draft", "review_required"):

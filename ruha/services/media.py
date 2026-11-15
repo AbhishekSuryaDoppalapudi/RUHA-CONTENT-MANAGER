@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from ruha.security import redact
-from ruha.services.subtitles import build_srt
+from ruha.services.subtitles import build_ass, build_cues, build_srt, cues_to_srt
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -143,9 +143,34 @@ def _norm_segment(src, out, w, h, crf, preset, cwd) -> None:
     run(cmd, cwd=cwd)
 
 
+def _bed(seconds: float, impact: bool = False) -> str:
+    """lavfi source for a soft synthesised ambient pad (no files needed), optionally with a low opening hit."""
+    expr = ("0.10*sin(2*PI*110*t)+0.07*sin(2*PI*165*t)+0.05*sin(2*PI*220*t)*(1+0.3*sin(2*PI*0.3*t))"
+            + ("+0.45*sin(2*PI*55*t)*exp(-5*t)" if impact else ""))
+    return f"aevalsrc={expr}|{expr}:s=48000:d={seconds:.2f}"
+
+
+def _bed_fades(seconds: float) -> str:
+    return f"afade=t=in:d=0.4,afade=t=out:st={max(0.1, seconds - 0.8):.2f}:d=0.8"
+
+
+def _card_video(png, out, seconds: float, w, h, crf, preset, cwd, fade_in: bool = True) -> None:
+    """Turn a still image into a short clip (with a soft ambient bed) matching the reel's encoding so it can be joined."""
+    vf = f"scale={w}:{h},setsar=1,fps=30,format=yuv420p"
+    if fade_in:
+        vf += ",fade=t=in:st=0:d=0.35"
+    cmd = ["ffmpeg", "-y", "-loop", "1", "-framerate", "30", "-t", f"{seconds:.2f}", "-i", str(png),
+           "-f", "lavfi", "-t", f"{seconds:.2f}", "-i", _bed(seconds, impact=fade_in),
+           "-vf", vf, "-af", _bed_fades(seconds), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+           *_encoder_args(crf, preset, False), "-shortest", str(out)]
+    run(cmd, cwd=cwd)
+
+
 def render_reel(source, start: float, end: float, out, *, segments=None, width=1080, height=1920,
                 crf=23, preset="veryfast", burn_subtitles=True, subtitle_style=None,
-                srt_path=None, watermark=None, intro=None, outro=None, use_gpu=False) -> Path:
+                srt_path=None, watermark=None, intro=None, outro=None, use_gpu=False,
+                cues=None, accent="#FFD166", open_card=None, close_card=None,
+                card_seconds=(2.2, 2.6)) -> Path:
     """Cut [start, end] from ``source`` into a vertical reel; never touches the source file."""
     _require()
     out = Path(out)
@@ -156,13 +181,16 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
     try:
         vf = (f"scale={width}:{height}:force_original_aspect_ratio=increase,"
               f"crop={width}:{height},setsar=1,fps=30")
-        if burn_subtitles and segments:
-            srt = tmp / "subs.srt"
-            build_srt(segments, start, end, srt, max_chars=int(style.get("max_chars_per_line", 28)))
-            if srt.stat().st_size > 0:
+        if burn_subtitles and (cues or segments):
+            use_cues = cues if cues is not None else build_cues(segments, start, end, int(style.get("max_chars_per_line", 28)))
+            if use_cues and style.get("creative", True):
+                build_ass(use_cues, tmp / "subs.ass", width, height, style, accent)
+                vf += ",ass=subs.ass"
+            elif use_cues:
+                cues_to_srt(use_cues, tmp / "subs.srt")
                 vf += (f",subtitles=subs.srt:original_size={width}x{height}:"
                        f"force_style='{_force_style(style)}'")
-        main_out = tmp / "main.mp4" if (intro or outro) else out
+        main_out = tmp / "main.mp4" if (intro or outro or open_card or close_card) else out
         cmd = ["ffmpeg", "-y", "-ss", f"{max(0.0, start):.3f}", "-i", str(source)]
         has_wm = bool(watermark and Path(watermark).exists())
         if has_wm:
@@ -173,6 +201,7 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
         else:
             cmd += ["-vf", vf, "-map", "0:v:0", "-map", "0:a?"]
         cmd += ["-t", f"{duration:.3f}", *_encoder_args(crf, preset, use_gpu),
+                "-af", "loudnorm=I=-15:TP=-1.5:LRA=11",
                 "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
                 "-movflags", "+faststart", str(main_out)]
         try:
@@ -184,8 +213,11 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
             i = cmd2.index("h264_nvenc")
             cmd2[i - 1:i + 8] = _encoder_args(crf, preset, False)
             run(cmd2, cwd=str(tmp))
-        if intro or outro:
+        if intro or outro or open_card or close_card:
             ordered = []
+            if open_card and Path(open_card).exists():
+                _card_video(open_card, tmp / "open.mp4", card_seconds[0], width, height, crf, preset, str(tmp))
+                ordered.append(tmp / "open.mp4")
             if intro and Path(intro).exists():
                 _norm_segment(intro, tmp / "intro.mp4", width, height, crf, preset, str(tmp))
                 ordered.append(tmp / "intro.mp4")
@@ -193,6 +225,9 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
             if outro and Path(outro).exists():
                 _norm_segment(outro, tmp / "outro.mp4", width, height, crf, preset, str(tmp))
                 ordered.append(tmp / "outro.mp4")
+            if close_card and Path(close_card).exists():
+                _card_video(close_card, tmp / "close.mp4", card_seconds[1], width, height, crf, preset, str(tmp))
+                ordered.append(tmp / "close.mp4")
             lst = tmp / "list.txt"
             lst.write_text("".join(f"file '{p.name}'\n" for p in ordered), encoding="utf-8")
             run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy",
@@ -207,3 +242,68 @@ def file_size(path) -> int:
         return Path(path).stat().st_size
     except OSError:
         return 0
+
+
+def render_image_reel(images, out, *, seconds_per_image: float = 3.5, width=1080, height=1920, crf=23,
+                      preset="veryfast", cues=None, accent="#FFD166", subtitle_style=None, open_card=None,
+                      close_card=None, watermark=None, card_seconds=(2.2, 2.6), music=None) -> Path:
+    """Slideshow reel from still images: slow zoom on each picture, creative captions, hook/closing cards."""
+    _require()
+    images = [Path(i) for i in images]
+    if not images:
+        raise MediaError("Choose at least one image")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    style = subtitle_style or {}
+    fr = max(1, int(round(seconds_per_image * 30)))
+    tmp = Path(tempfile.mkdtemp(prefix="ruha_imgreel_"))
+    try:
+        cmd = ["ffmpeg", "-y"]
+        chains = []
+        for i, img in enumerate(images):
+            cmd += ["-loop", "1", "-framerate", "30", "-t", f"{seconds_per_image:.2f}", "-i", str(img)]
+            zoom_in = i % 2 == 0
+            z = "min(zoom+0.0009,1.14)" if zoom_in else "if(eq(on,0),1.14,max(zoom-0.0009,1.0))"
+            chains.append(f"[{i}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+                          f"crop={width * 2}:{height * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                          f"d={fr}:s={width}x{height}:fps=30,setsar=1,format=yuv420p[v{i}]")
+        n = len(images)
+        total = seconds_per_image * n
+        has_music = bool(music and Path(music).exists())
+        if has_music:                                    # the user's own track, looped to the slideshow length
+            cmd += ["-stream_loop", "-1", "-t", f"{total:.2f}", "-i", str(music)]
+        else:
+            cmd += ["-f", "lavfi", "-t", f"{total:.2f}", "-i", _bed(total)]
+        fc = ";".join(chains) + ";" + "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[cat]"
+        last = "cat"
+        if cues:
+            build_ass(cues, tmp / "subs.ass", width, height, style, accent)
+            fc += f";[{last}]ass=subs.ass[sub]"
+            last = "sub"
+        has_wm = bool(watermark and Path(watermark).exists())
+        if has_wm:
+            cmd += ["-i", str(watermark)]
+            fc += (f";[{n + 1}:v]scale={int(width * 0.18)}:-1,format=rgba,colorchannelmixer=aa=0.75[wm];"
+                   f"[{last}][wm]overlay=W-w-40:70:format=auto[fin]")
+            last = "fin"
+        main_out = tmp / "main.mp4" if (open_card or close_card) else out
+        afx = _bed_fades(total) if not has_music else f"volume=0.8,{_bed_fades(total)}"
+        cmd += ["-filter_complex", fc, "-af", afx, "-map", f"[{last}]", "-map", f"{n}:a", "-t", f"{total:.2f}",
+                *_encoder_args(crf, preset, False), "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart", str(main_out)]
+        run(cmd, cwd=str(tmp))
+        if open_card or close_card:
+            ordered = []
+            if open_card and Path(open_card).exists():
+                _card_video(open_card, tmp / "open.mp4", card_seconds[0], width, height, crf, preset, str(tmp))
+                ordered.append(tmp / "open.mp4")
+            ordered.append(main_out)
+            if close_card and Path(close_card).exists():
+                _card_video(close_card, tmp / "close.mp4", card_seconds[1], width, height, crf, preset, str(tmp))
+                ordered.append(tmp / "close.mp4")
+            (tmp / "list.txt").write_text("".join(f"file '{p.name}'\n" for p in ordered), encoding="utf-8")
+            run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy",
+                 "-movflags", "+faststart", str(out)], cwd=str(tmp))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out

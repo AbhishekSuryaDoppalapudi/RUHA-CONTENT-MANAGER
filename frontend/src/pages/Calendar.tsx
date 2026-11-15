@@ -67,7 +67,7 @@ function EntryModal({ entry, onClose, onSaved }: { entry: Partial<CalEntry>; onC
   const toast = useToast(), confirm = useConfirm()
   const [f, setF] = useState({ ...entry, reminder_at: entry.reminder_at ?? '' } as any)
   const [busy, setBusy] = useState(false)
-  const assets = useApi(() => api.get<Asset[]>('/api/assets?kind=main_reel,short_reel,poster,social_post'), [])
+  const assets = useApi(() => api.get<Asset[]>('/api/assets?kind=main_reel,short_reel,image_reel,poster,social_post'), [])
   const save = async () => {
     if (!f.title?.trim()) return toast.err('Enter a title')
     setBusy(true)

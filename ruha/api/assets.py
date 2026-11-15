@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["assets"])
 
 LIBRARY_TYPES = {
     "video": None, "reel": ["main_reel"], "short": ["short_reel"], "poster": ["poster"],
-    "social": ["social_post"], "transcript": ["transcript"], "subtitle": ["subtitle", "translation_subtitle"],
+    "social": ["social_post"], "image": ["image_reel"], "transcript": ["transcript"], "subtitle": ["subtitle", "translation_subtitle"],
     "caption": ["caption"], "audio": ["audio"], "translation": ["translation_video"],
 }
 
@@ -178,6 +178,12 @@ def regenerate(aid: int, body: RegenerateIn, ctx=Depends(app_ctx)):
         elif kind == "social_post":
             jid = ctx.queue.enqueue("social_post_generation", pid, {"asset_id": aid, "mode": body.mode,
                                                                     "note": body.note, "layout": body.layout})
+        elif kind == "image_reel":
+            m = dict(a.meta)
+            jid = ctx.queue.enqueue("image_reel", pid, {"images": m.get("images"), "hook": a.title,
+                                                         "seconds_per_image": m.get("seconds_per_image", 3.5),
+                                                         "theme": m.get("visual_theme"), "closing": m.get("closing", ""),
+                                                         "language": m.get("language", "English")})
         else:
             raise HTTPException(400, "This asset type cannot be regenerated")
     return {"job_id": jid}

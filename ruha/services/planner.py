@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 
+from ruha.services import themes
+
 MAIN_RANGE = (30.0, 95.0)    # accepted seconds for main reels (target 35-90)
 SHORT_RANGE = (12.0, 35.0)   # accepted seconds for short reels (target 15-30)
 SINGLE_PASS_CHARS = 22000
@@ -59,29 +61,35 @@ def _context_block(ctxinfo: dict) -> str:
     return "\n\n".join(parts)
 
 
+THEME_NAMES = ["warfare", "spirit", "grace", "peace", "hope", "faith", "love", "strength", "growth"]
+N_MAIN, N_SHORT, N_POSTS = 1, 2, 2
+
 PLAN_SCHEMA = """{
  "title":"short descriptive title",
  "main_theme":"one sentence",
+ "visual_theme":"ONE of: warfare, spirit, grace, peace, hope, faith, love, strength, growth",
  "summary":"faithful 3-5 sentence summary",
  "themes":["2-6 single or two-word topics"],
  "key_points":["..."],
  "quotes":["exact sentences copied verbatim from the transcript"],
- "main_reels":[{"start":0,"end":60,"hook":"...","reason":"...","caption":"...","hashtags":["#..."]}],
- "short_reels":[{"start":0,"end":20,"hook":"...","reason":"...","caption":"...","hashtags":["#..."]}],
- "poster":{"headline":"...","subheadline":"...","quote":"verbatim quote","theme":"..."},
- "encouragement_posts":[{"headline":"...","body":"...","caption":"...","reference":""}],
+ "main_reels":[{"start":0,"end":60,"hook":"max 8 words","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
+ "short_reels":[{"start":0,"end":20,"hook":"max 8 words","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
+ "poster":{"hook":"max 8 words","verse":"reference the speaker cited, else empty","verse_text":"the verse words exactly as spoken, else empty","theme":"..."},
+ "encouragement_posts":[{"hook":"max 10 words","reference":"","caption":"..."}],
  "hashtags":["#..."]
 }"""
 
 
 def _rules(duration: float) -> str:
     return f"""Requirements:
-- Return EXACTLY 3 main_reels (35-90 seconds each) and 2 short_reels (15-30 seconds each) and EXACTLY 2 encouragement_posts.
+- Return EXACTLY {N_MAIN} main_reel (35-90 seconds), {N_SHORT} short_reels (15-30 seconds each) and EXACTLY {N_POSTS} encouragement_posts.
 - Timestamps are in seconds and must lie between 0 and {duration:.1f}. Reels must not overlap each other.
-- Choose complete thoughts: begin where an idea starts and end where it lands. Prefer strong stories and practical teaching.
-- Every reel needs a strong opening hook (first line a viewer reads/hears).
-- quotes and poster.quote must be copied word-for-word from the transcript; never invent quotes.
-- reference: only a Bible/source reference the speaker explicitly mentions; otherwise an empty string.
+- Choose complete thoughts: begin where an idea starts and end where it lands.
+- HOOK TEXT: every hook (reels, poster, posts) is a short, powerful line that captures the THEME of the sermon and makes a viewer stop scrolling. Write it yourself in your own words - do NOT copy a long sentence from the transcript, do NOT write a summary and never start with "In this sermon" or "This talk". Good hooks are short and bold, e.g. "Stop fighting the wrong enemy", "Your breakthrough is closer than you think".
+- "closing" is a short call-to-action or blessing shown at the end of a reel.
+- visual_theme: pick the single theme that best matches the sermon's mood (warfare=spiritual battle, spirit=Holy Spirit/fire, grace=forgiveness/gift, peace=rest/healing, hope=new beginnings, faith=trust/prayer, love=compassion, strength=endurance, growth=discipleship).
+- quotes must be copied word-for-word from the transcript; never invent quotes.
+- verse / reference: ONLY a Bible reference the speaker explicitly says in the talk; otherwise an empty string. verse_text only if the speaker actually reads it aloud.
 - The two encouragement posts must have clearly different angles and wording.
 - Stay faithful to the speaker's meaning. Write in the same language as the transcript."""
 
@@ -150,6 +158,49 @@ def _overlap(a, b) -> float:
     return max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
 
 
+def _free_parts(a: float, b: float, used: list) -> list:
+    """The parts of [a, b] not covered by any already-chosen reel."""
+    parts = [(a, b)]
+    for u in sorted(used):
+        nxt = []
+        for s, e in parts:
+            if u[1] <= s or u[0] >= e:
+                nxt.append((s, e))
+                continue
+            if u[0] > s:
+                nxt.append((s, u[0]))
+            if u[1] < e:
+                nxt.append((u[1], e))
+        parts = nxt
+    return parts
+
+
+def _repair_overlap(segments, a, b, lo, hi, duration, used):
+    """Fix a reel that overlaps earlier ones: keep its longest free part, else move it into the
+    largest free gap of the video. Raises PlanError only when there is genuinely no room."""
+    def ok(x, y):
+        return y - x >= min(lo, duration * 0.5) and not any(_overlap((x, y), u) > 0.4 * (y - x) for u in used)
+
+    for s, e in sorted(_free_parts(a, b, used), key=lambda p: p[0] - p[1]):      # longest first
+        if e - s >= lo:
+            x, y = _snap(segments, s, e, lo, hi, duration)
+            if ok(x, y):
+                return x, y
+    return _free_window(segments, lo, hi, duration, used, ok)
+
+
+def _free_window(segments, lo, hi, duration, used, ok=None):
+    """A moderate-length clip in the largest free gap of the video (leaves room for the other reels)."""
+    ok = ok or (lambda x, y: y - x >= min(lo, duration * 0.5) and
+                not any(_overlap((x, y), u) > 0.4 * (y - x) for u in used))
+    for s, e in sorted(_free_parts(0.0, duration, used), key=lambda p: p[0] - p[1]):
+        if e - s >= lo:
+            x, y = _snap(segments, s, min(e, s + (lo + hi) / 2), lo, hi, duration)
+            if ok(x, y):
+                return x, y
+    raise PlanError("There is no free part of the video left for another reel.")
+
+
 def normalize_plan(plan: dict, segments: list, duration: float, full_text: str) -> dict:
     if not segments:
         raise PlanError("Transcript has no segments to plan from.")
@@ -164,49 +215,70 @@ def normalize_plan(plan: dict, segments: list, duration: float, full_text: str) 
     out["hashtags"] = [h if h.startswith("#") else f"#{h}" for h in
                        (str(x).strip().replace(" ", "") for x in plan.get("hashtags", [])) if h][:15]
     used = []
-    for key, (lo, hi), count in (("main_reels", MAIN_RANGE, 3), ("short_reels", SHORT_RANGE, 2)):
-        items = plan.get(key) or []
-        if len(items) != count:
-            raise PlanError(f"The model returned {len(items)} {key}; expected {count}.")
+    for key, (lo, hi), count in (("main_reels", MAIN_RANGE, N_MAIN), ("short_reels", SHORT_RANGE, N_SHORT)):
+        items = plan.get(key) or plan.get(key[:-1]) or []       # tolerate "main_reel" from a small model
+        if isinstance(items, dict):
+            items = [items]
+        items = [i for i in items if isinstance(i, dict)][:count]
+        while len(items) < count:                                # small models sometimes leave one out:
+            items.append({"_auto": True})                        # pick a free stretch of the video ourselves
         fixed = []
         for it in items:
-            try:
-                a, b = _snap(segments, float(it["start"]), float(it["end"]), lo, hi, duration)
-            except (KeyError, TypeError, ValueError):
-                raise PlanError(f"A {key} entry has invalid timestamps.")
-            if b - a < min(lo, duration * 0.5):
-                raise PlanError(f"A {key} entry is too short after snapping to the transcript.")
-            if any(_overlap((a, b), u) > 0.4 * (b - a) for u in used):
-                raise PlanError("Two selected reels overlap heavily; choose distinct moments.")
+            if it.get("_auto"):
+                a, b = _free_window(segments, lo, hi, duration, used)
+                it = {"reason": "Selected automatically (the AI suggested fewer reels than needed)"}
+            else:
+                try:
+                    a, b = _snap(segments, float(it["start"]), float(it["end"]), lo, hi, duration)
+                except (KeyError, TypeError, ValueError):
+                    raise PlanError(f"A {key} entry has invalid timestamps.")
+                if b - a < min(lo, duration * 0.5):
+                    raise PlanError(f"A {key} entry is too short after snapping to the transcript.")
+                if any(_overlap((a, b), u) > 0.4 * (b - a) for u in used):
+                    a, b = _repair_overlap(segments, a, b, lo, hi, duration, used)
             used.append((a, b))
-            fixed.append({"start": a, "end": b, "hook": str(it.get("hook", "")).strip(),
+            fixed.append({"start": a, "end": b, "hook": str(it.get("hook", "")).strip()[:120],
+                          "closing": str(it.get("closing", "")).strip()[:120],
                           "reason": str(it.get("reason", "")).strip(),
                           "caption": str(it.get("caption", "")).strip(),
                           "hashtags": [h if h.startswith("#") else f"#{h}"
                                        for h in (str(x).strip().replace(" ", "") for x in it.get("hashtags", [])) if h]
                                       or out["hashtags"][:6]})
         out[key] = fixed
+    out["visual_theme"] = themes.resolve(plan.get("visual_theme"), " ".join(
+        [out["main_theme"], out["summary"], " ".join(out["themes"])]))
     poster = plan.get("poster") or {}
-    q = str(poster.get("quote", "")).strip()
-    if q and not quote_in_transcript(q, full_text):
-        q = out["quotes"][0] if out["quotes"] else ""
-    out["poster"] = {"headline": str(poster.get("headline") or out["title"]).strip(),
-                     "subheadline": str(poster.get("subheadline", "")).strip(), "quote": q,
+    ref = str(poster.get("verse") or poster.get("reference") or "").strip()
+    if ref and not reference_supported(ref, full_text):
+        ref = ""
+    vt = str(poster.get("verse_text") or poster.get("quote") or "").strip()
+    if not ref or not quote_in_transcript(vt, full_text):
+        vt = ""                                              # only verses the speaker really read aloud
+    hook = str(poster.get("hook") or poster.get("headline") or out["main_theme"] or out["title"]).strip()
+    out["poster"] = {"headline": hook[:140], "subheadline": ref, "quote": vt,
                      "theme": str(poster.get("theme") or out["main_theme"]).strip()}
-    out["encouragement_posts"] = normalize_posts(plan.get("encouragement_posts") or [], full_text, 2)
+    out["encouragement_posts"] = normalize_posts(plan.get("encouragement_posts") or [], full_text, N_POSTS)
+    for key in ("main_reels", "short_reels"):                # a reel always has a hook to open with
+        for r in out[key]:
+            r["hook"] = r["hook"] or out["poster"]["headline"]
+            r["closing"] = r["closing"] or "Follow for more"
     return out
 
 
 def normalize_posts(posts: list, full_text: str, count: int) -> list:
+    """Posts carry a theme-based hook line and, only when the speaker cited one, the verse reference."""
     if len(posts) < count:
         raise PlanError(f"The model returned {len(posts)} posts; expected {count}.")
     res = []
     for p in posts[:count]:
-        ref = str(p.get("reference") or p.get("scripture_reference") or "").strip()
+        ref = str(p.get("reference") or p.get("scripture_reference") or p.get("verse") or "").strip()
         if ref and not reference_supported(ref, full_text):
             ref = ""
-        res.append({"headline": str(p.get("headline", "")).strip(), "body": str(p.get("body", "")).strip(),
-                    "caption": str(p.get("caption", "")).strip(), "reference": ref})
+        hook = str(p.get("hook") or p.get("headline") or "").strip()
+        if not hook:
+            raise PlanError("A post has no hook text.")
+        res.append({"headline": hook[:160], "body": "", "caption": str(p.get("caption", "")).strip(),
+                    "reference": ref})
     return res
 
 
@@ -235,10 +307,10 @@ def create_plan(llm, cfg: dict, segments: list, duration: float, ctxinfo: dict, 
 def regenerate_posts(llm, cfg: dict, plan: dict, full_text: str, avoid: list, ctxinfo: dict, count: int = 1,
                      note: str = "") -> list:
     prompt = (f"Write {count} NEW encouragement social post(s) based on this talk. Return ONLY JSON "
-              '{"posts":[{"headline":"...","body":"...","caption":"...","reference":""}]}.\n'
+              '{"posts":[{"hook":"max 10 words","caption":"...","reference":""}]}.\n'
               f"Talk title: {plan.get('title')}\nTheme: {plan.get('main_theme')}\nSummary: {plan.get('summary')}\n"
               f"Key points: {json.dumps(plan.get('key_points', []), ensure_ascii=False)}\n"
-              "Rules: stay faithful to the talk; reference only if the speaker explicitly cited it, else empty; "
+              "Rules: the hook is a short, powerful line capturing the THEME of the talk in your own words (not a copied sentence); stay faithful to the talk; reference only if the speaker explicitly cited it, else empty; "
               "write in the language of the summary.\n"
               + (f"Owner note for this revision: {note}\n" if note else "")
               + ("DO NOT resemble these existing posts:\n- " + "\n- ".join(x[:250] for x in avoid) + "\n" if avoid else "")

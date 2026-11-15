@@ -123,17 +123,18 @@ FULL = " ".join(s["text"] for s in make_segments())
 
 def _plan(**over):
     p = {"title": "T", "main_theme": "m", "summary": "s", "themes": ["grace"], "quotes": [],
-         "main_reels": [{"start": 1, "end": 46}, {"start": 52, "end": 100}, {"start": 106, "end": 158}],
+         "main_reels": [{"start": 1, "end": 46, "hook": "Grace is free", "closing": "Receive it"}],
          "short_reels": [{"start": 162, "end": 182}, {"start": 183, "end": 200}],
-         "poster": {"headline": "H", "quote": "never said this"},
-         "encouragement_posts": [{"headline": "a", "body": "b", "reference": "Romans 8"},
-                                 {"headline": "c", "body": "d", "reference": "Segment"}]}
+         "poster": {"hook": "H", "verse": "Romans 8", "verse_text": "never said this"},
+         "encouragement_posts": [{"hook": "a", "reference": "Romans 8"},
+                                 {"hook": "c", "reference": "Segment"}]}
     p.update(over)
     return p
 
 
 def test_normalize_snaps_and_bounds():
     out = planner.normalize_plan(_plan(), make_segments(), 200, FULL)
+    assert len(out["main_reels"]) == 1 and len(out["short_reels"]) == 2 and len(out["encouragement_posts"]) == 2
     assert out["main_reels"][0]["start"] == 0 and out["main_reels"][0]["end"] == 50
     for r in out["main_reels"]:
         assert planner.MAIN_RANGE[0] <= r["end"] - r["start"] <= planner.MAIN_RANGE[1]
@@ -141,19 +142,67 @@ def test_normalize_snaps_and_bounds():
         assert planner.SHORT_RANGE[0] <= r["end"] - r["start"] <= planner.SHORT_RANGE[1]
 
 
-def test_unspoken_quotes_and_references_are_removed():
+def test_reels_get_hook_and_closing_and_plan_gets_a_theme():
+    out = planner.normalize_plan(_plan(visual_theme="warfare"), make_segments(), 200, FULL)
+    assert out["visual_theme"] == "warfare"
+    assert out["main_reels"][0]["hook"] == "Grace is free" and out["main_reels"][0]["closing"] == "Receive it"
+    assert all(r["hook"] and r["closing"] for r in out["short_reels"])        # filled with sensible defaults
+    bad = planner.normalize_plan(_plan(visual_theme="nonsense", main_theme="the battle against the enemy"),
+                                 make_segments(), 200, FULL)
+    assert bad["visual_theme"] == "warfare"                                   # chosen from the sermon's words
+
+
+def test_unspoken_verses_are_removed_and_posts_are_hook_only():
     out = planner.normalize_plan(_plan(), make_segments(), 200, FULL)
-    assert out["poster"]["quote"] == ""                           # invented quote dropped
-    assert out["encouragement_posts"][0]["reference"] == ""       # "Romans" never spoken
-    assert out["encouragement_posts"][1]["reference"] == "Segment"  # spoken word kept
+    assert out["poster"]["subheadline"] == "" and out["poster"]["quote"] == ""   # "Romans" never spoken
+    assert out["encouragement_posts"][0]["reference"] == ""
+    assert out["encouragement_posts"][1]["reference"] == "Segment"               # spoken name kept
+    assert all(p["body"] == "" and p["headline"] for p in out["encouragement_posts"])
 
 
-def test_wrong_counts_and_overlap_rejected():
+def test_verse_text_kept_only_when_read_aloud():
+    verse = "grace is the free gift of God number 3 for every person"
+    out = planner.normalize_plan(_plan(poster={"hook": "H", "verse": "Segment 3", "verse_text": verse}),
+                                 make_segments(), 200, FULL)
+    assert out["poster"]["subheadline"] == "Segment 3" and out["poster"]["quote"] == verse
+
+
+def test_missing_reels_are_filled_automatically_and_extras_trimmed():
+    out = planner.normalize_plan(_plan(main_reels=[]), make_segments(), 200, FULL)          # model returned none
+    assert len(out["main_reels"]) == 1 and out["main_reels"][0]["reason"].startswith("Selected automatically")
+    assert out["main_reels"][0]["hook"]                                                       # still has a hook
+    one = planner.normalize_plan(_plan(main_reels={"start": 1, "end": 46, "hook": "x"}), make_segments(), 200, FULL)
+    assert len(one["main_reels"]) == 1                                                        # single dict accepted
+    many = [{"start": 1, "end": 46}, {"start": 60, "end": 100}]
+    assert len(planner.normalize_plan(_plan(main_reels=many), make_segments(), 200, FULL)["main_reels"]) == 1
+    alt = _plan(); alt["main_reel"] = alt.pop("main_reels")
+    assert len(planner.normalize_plan(alt, make_segments(), 200, FULL)["main_reels"]) == 1    # "main_reel" key
+    reels = [(r["start"], r["end"]) for r in out["main_reels"] + out["short_reels"]]
+    for i, a in enumerate(reels):
+        for b in reels[i + 1:]:
+            assert planner._overlap(a, b) <= 0.4 * min(a[1] - a[0], b[1] - b[0]) + 1e-6
+
+
+def test_missing_posts_are_rejected():
     with pytest.raises(planner.PlanError):
-        planner.normalize_plan(_plan(main_reels=[{"start": 0, "end": 50}]), make_segments(), 200, FULL)
-    overlap = [{"start": 0, "end": 50}, {"start": 5, "end": 55}, {"start": 106, "end": 158}]
+        planner.normalize_plan(_plan(encouragement_posts=[{"hook": "only one"}]), make_segments(), 200, FULL)
+
+
+def test_overlapping_reels_are_repaired_not_rejected():
+    out = planner.normalize_plan(_plan(short_reels=[{"start": 162, "end": 182}, {"start": 165, "end": 185}],
+                                       main_reels=[{"start": 150, "end": 190}]), make_segments(), 200, FULL)
+    reels = [(r["start"], r["end"]) for r in out["main_reels"] + out["short_reels"]]
+    for i, a in enumerate(reels):
+        for b in reels[i + 1:]:
+            assert planner._overlap(a, b) <= 0.4 * min(a[1] - a[0], b[1] - b[0]) + 1e-6
+
+
+def test_overlap_with_no_free_room_is_rejected():
+    segs = make_segments()
+    same = [{"start": 0, "end": 40}]
     with pytest.raises(planner.PlanError):
-        planner.normalize_plan(_plan(main_reels=overlap), make_segments(), 200, FULL)
+        planner.normalize_plan(_plan(main_reels=same, short_reels=[{"start": 0, "end": 40}, {"start": 0, "end": 40}]),
+                               segs, 45, FULL)
 
 
 def test_create_plan_retries_then_succeeds():
@@ -162,9 +211,9 @@ def test_create_plan_retries_then_succeeds():
 
         def generate_json(self, prompt, cfg):
             Flaky.n += 1
-            return _plan(main_reels=[]) if Flaky.n == 1 else _plan()
+            return _plan(encouragement_posts=[]) if Flaky.n == 1 else _plan()
     plan = planner.create_plan(Flaky(), {}, make_segments(), 200, {}, log=lambda *a, **k: None)
-    assert Flaky.n == 2 and len(plan["main_reels"]) == 3
+    assert Flaky.n == 2 and len(plan["main_reels"]) == 1
 
 
 def test_long_transcript_uses_chunked_analysis():
@@ -175,7 +224,7 @@ def test_long_transcript_uses_chunked_analysis():
         def generate_json(self, prompt, cfg):
             calls.append("PART" if "PART of a longer" in prompt else "REDUCE")
             return {"summary": "x", "themes": [], "quotes": [], "moments": []} if calls[-1] == "PART" else _plan(
-                main_reels=[{"start": 0, "end": 60}, {"start": 200, "end": 260}, {"start": 500, "end": 560}],
+                main_reels=[{"start": 200, "end": 260}],
                 short_reels=[{"start": 900, "end": 920}, {"start": 1200, "end": 1220}])
     plan = planner.create_plan(LLM(), {}, segs, 2000, {}, log=lambda *a, **k: None)
     assert calls.count("PART") >= 2 and calls[-1] == "REDUCE" and len(plan["short_reels"]) == 2

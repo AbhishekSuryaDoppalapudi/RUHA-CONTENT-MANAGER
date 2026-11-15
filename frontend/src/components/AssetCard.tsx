@@ -3,14 +3,14 @@ import { Asset, fileUrl } from '../api'
 import { StatusBadge, fmtBytes, fmtDur, label } from '../ui'
 
 export const KIND_LABEL: Record<string, string> = {
-  main_reel: 'Main reel', short_reel: 'Short reel', poster: 'Poster', social_post: 'Social post', subtitle: 'Subtitles',
+  main_reel: 'Main reel', short_reel: 'Short reel', image_reel: 'Image reel', poster: 'Poster', social_post: 'Social post', subtitle: 'Subtitles',
   transcript: 'Transcript', caption: 'Captions', translation_video: 'Translation', translation_subtitle: 'Translated subtitles',
   audio: 'Audio', video: 'Source video',
 }
 
 export function KindIcon({ kind, size = 28 }: { kind: string; size?: number }) {
   const p = { size, strokeWidth: 1.5 }
-  if (kind === 'main_reel' || kind === 'short_reel') return <Film {...p} />
+  if (kind === 'main_reel' || kind === 'short_reel' || kind === 'image_reel') return <Film {...p} />
   if (kind === 'poster') return <ImageIcon {...p} />
   if (kind === 'social_post') return <MessageSquareQuote {...p} />
   if (kind === 'subtitle' || kind === 'translation_subtitle') return <Captions {...p} />
@@ -23,7 +23,7 @@ export function KindIcon({ kind, size = 28 }: { kind: string; size?: number }) {
 export function Thumb({ a, className = '' }: { a: Asset; className?: string }) {
   const src = a.entity === 'video' ? fileUrl.videoThumb(a.id) : fileUrl.preview(a.id, a.version)
   const hasImg = a.entity === 'video' ? a.has_preview : a.has_preview
-  const portrait = a.kind === 'main_reel' || a.kind === 'short_reel'
+  const portrait = a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel'
   return (
     <div className={`relative overflow-hidden bg-surface2 flex items-center justify-center text-muted ${className}`}>
       {hasImg ? <img src={src} alt="" loading="lazy" className={`w-full h-full ${portrait ? 'object-cover' : 'object-cover'}`} /> : <KindIcon kind={a.kind} />}
@@ -56,7 +56,7 @@ export default function AssetCard({ a, onOpen, selected, onSelect, view = 'grid'
   return (
     <div className={`card group overflow-hidden cursor-pointer hover:border-accent/50 hover:-translate-y-0.5 transition ${selected ? 'ring-2 ring-primary' : ''}`} onClick={onOpen}>
       <div className="relative">
-        <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' ? 'aspect-[9/12]' : 'aspect-[4/3]'}`} />
+        <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel' ? 'aspect-[9/12]' : 'aspect-[4/3]'}`} />
         {select && <div className="absolute top-2 left-2 bg-bg/70 rounded p-1">{select}</div>}
         <div className="absolute top-2 right-2"><StatusBadge status={a.status} /></div>
       </div>

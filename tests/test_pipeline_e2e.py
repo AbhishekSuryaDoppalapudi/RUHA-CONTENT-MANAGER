@@ -24,7 +24,7 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
     by = {}
     for x in a:
         by.setdefault(x["kind"], []).append(x)
-    assert len(by["main_reel"]) == 3 and len(by["short_reel"]) == 2
+    assert len(by["main_reel"]) == 1 and len(by["short_reel"]) == 2
     assert len(by["poster"]) == 1 and len(by["social_post"]) == 2
     assert {"transcript", "subtitle"} <= set(by)
 
@@ -32,7 +32,7 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
     for r in by["main_reel"] + by["short_reel"]:
         info = media.probe(client.app.state.ctx.db.session().__enter__().get(__import__("ruha.models", fromlist=["GeneratedAsset"]).GeneratedAsset, r["id"]).file_path)
         assert (info["width"], info["height"]) == (270, 480) and info["audio_tracks"] == 1
-        assert abs(info["duration"] - (r["reel"]["end"] - r["reel"]["start"])) < 1.5
+        assert abs(info["duration"] - (r["reel"]["end"] - r["reel"]["start"]) - 4.8) < 1.5   # + hook and closing images
         assert r["has_file"] and r["has_preview"] and r["hashtags"] and r["caption"] and r["reel"]["excerpt"]
     mains = sorted(by["main_reel"], key=lambda x: x["slot"])
     assert 30 <= mains[0]["reel"]["end"] - mains[0]["reel"]["start"] <= 95
@@ -49,9 +49,9 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
     p = by["poster"][0]
     r = client.get(f"/api/assets/{p['id']}/file")
     assert r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
-    # guardrails: invented reference "John 3:16" was removed; unspoken quote dropped from the plan
+    # guardrails: only references the speaker really said are kept; unspoken quote dropped from the plan
     posts = {x["slot"]: x for x in by["social_post"]}
-    assert posts["social_1"]["social_post"]["reference"] == ""
+    assert posts["social_1"]["social_post"]["reference"] == "Segment 3" and posts["social_2"]["social_post"]["reference"] == ""
     assert posts["social_1"]["meta"]["layout"] != posts["social_2"]["meta"]["layout"]     # separate designs
     tr = client.get(f"/api/projects/{pid}/transcript").json()
     assert tr["exists"] and len(tr["segments"]) == len(make_segments()) and tr["themes"] == ["grace", "gift"]
@@ -61,17 +61,17 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
 def test_dashboard_and_analytics_reflect_real_records(client, processed):
     d = client.get("/api/dashboard").json()
     m = d["metrics"]
-    assert (m["total_projects"], m["reels_generated"], m["posters_created"], m["social_posts_created"]) == (1, 5, 1, 2)
+    assert (m["total_projects"], m["reels_generated"], m["posters_created"], m["social_posts_created"]) == (1, 3, 1, 2)
     assert m["videos_processed"] == 1 and m["failed_jobs"] == 0 and m["storage_used_bytes"] > 0
     assert d["processing"]["completed"] == 4 and d["processing"]["queued"] == 0
-    assert len(d["recent"]["generated"]) == 8 and d["recent"]["uploads"][0]["project"] == "Sunday Grace"
+    assert len(d["recent"]["generated"]) == 6 and d["recent"]["uploads"][0]["project"] == "Sunday Grace"
     an = client.get("/api/analytics").json()
-    assert an["assets"]["total"] == 8 and an["assets"]["draft"] == 8 and an["external_metrics"]["available"] is False
+    assert an["assets"]["total"] == 6 and an["assets"]["draft"] == 6 and an["external_metrics"]["available"] is False
     assert an["production_time"]["reel_generation"]["count"] == 1
     assert {t["topic"] for t in an["topics"]} == {"grace", "gift"}
     csv = client.get("/api/analytics/export?format=csv")
     assert csv.status_code == 200 and "section,key,value" in csv.text
-    assert client.get("/api/analytics/export?format=json").json()["assets"]["total"] == 8
+    assert client.get("/api/analytics/export?format=json").json()["assets"]["total"] == 6
 
 
 def test_review_workflow_is_per_asset(client, processed):
@@ -148,7 +148,7 @@ def test_reel_regeneration_keeps_version_history_and_files(client, ctx, processe
     assert client.get(f"/api/assets/{reel['id']}/versions/1/file").status_code == 200
     info = media.probe(client.get(f"/api/assets/{reel['id']}/file").content and
                        next(Path(ctx.settings.projects_dir).rglob("main_1_v2.mp4")))
-    assert 49 < info["duration"] < 51
+    assert 53 < info["duration"] < 56      # 50 s clip + 2.2 s hook image + 2.6 s closing image
     assert any(Path(ctx.settings.projects_dir).rglob("versions/*/v1_main_1_v1.mp4"))
 
 
@@ -172,12 +172,12 @@ def test_social_post_edit_and_regenerate(client, ctx, processed, fakes):
 def test_library_search_filter_tags_and_bulk_download(client, processed):
     lib = client.get("/api/library").json()
     assert lib["total"] >= 9 and {i["entity"] for i in lib["items"]} == {"asset", "video"}
-    assert client.get("/api/library?type=reel").json()["total"] == 3
+    assert client.get("/api/library?type=reel").json()["total"] == 1
     assert client.get("/api/library?type=short").json()["total"] == 2
     assert client.get("/api/library?type=poster").json()["total"] == 1
     assert client.get("/api/library?type=video").json()["total"] == 1
     assert client.get("/api/library?type=nonsense").status_code == 400
-    assert client.get("/api/library?q=Receive").json()["total"] == 1
+    assert client.get("/api/library?q=Free grace").json()["total"] == 1
     reel = client.get("/api/library?type=reel&sort=name&order=asc").json()["items"][0]
     client.put(f"/api/assets/{reel['id']}/tags", json={"tags": ["Best Of"]})
     assert client.get("/api/library?tag=best of").json()["total"] == 1

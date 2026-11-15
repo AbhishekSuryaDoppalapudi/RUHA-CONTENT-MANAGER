@@ -65,28 +65,51 @@ class FakeLLM:
         if "Write 1 NEW" in prompt or "Write 2 NEW" in prompt:
             self.post_variant += 1
             n = self.post_variant
-            return {"posts": [{"headline": f"Fresh hope variant {n}", "body": f"A different angle number {n} about trust",
-                               "caption": f"caption variant {n}", "reference": ""}]}
+            return {"posts": [{"hook": f"Fresh hope variant {n}", "caption": f"caption variant {n}", "reference": ""}]}
+        if prompt.startswith("Translate each of these subtitle lines"):
+            import json as _j
+            lines = _j.loads(prompt.strip().splitlines()[-1])
+            return {"lines": [f"[tr] {x}" for x in lines]}
         return {
             "title": "Grace Sermon", "main_theme": "God's grace is free", "summary": "A talk about grace.",
+            "visual_theme": "grace",
             "themes": ["grace", "gift"], "key_points": ["grace is free"],
             "quotes": ["grace is the free gift of God number 3 for every person", "this sentence was never spoken"],
             "main_reels": [
-                {"start": 1, "end": 46, "hook": "Grace is free", "reason": "opening", "caption": "Free grace #1", "hashtags": ["#grace"]},
-                {"start": 52, "end": 100, "hook": "Receive the gift", "reason": "middle", "caption": "Gift #2"},
-                {"start": 106, "end": 158, "hook": "For everyone", "reason": "end", "caption": "Everyone #3"}],
+                {"start": 1, "end": 46, "hook": "Grace is free", "closing": "Receive it today", "reason": "opening",
+                 "caption": "Free grace #1", "hashtags": ["#grace"]}],
             "short_reels": [
                 {"start": 162, "end": 182, "hook": "Short one", "reason": "s1", "caption": "Short #1"},
                 {"start": 183, "end": 200, "hook": "Short two", "reason": "s2", "caption": "Short #2"}],
-            "poster": {"headline": "Grace Is Free", "subheadline": "A gift for all",
-                       "quote": "grace is the free gift of God number 3 for every person", "theme": "Grace"},
+            "poster": {"hook": "Grace Is Free", "verse": "Segment 3",
+                       "verse_text": "grace is the free gift of God number 3 for every person", "theme": "Grace"},
             "encouragement_posts": [
-                {"headline": "You are loved", "body": "Rest in the gift you were given today.", "caption": "Loved",
-                 "reference": "John 3:16"},
-                {"headline": "Keep going", "body": "Every small step of faith matters to heaven.", "caption": "Go",
-                 "reference": ""}],
+                {"hook": "You are loved", "caption": "Loved", "reference": "Segment 3"},
+                {"hook": "Keep going", "caption": "Go", "reference": ""}],
             "hashtags": ["grace", "#faith"],
         }
+
+
+class FakeImageGen:
+    """Stands in for Stable Diffusion: writes a plain picture and counts calls."""
+    name = "fake-imagegen"
+
+    def __init__(self):
+        self.calls = []
+        self.fail = False
+
+    def available(self, cfg):
+        return True, ""
+
+    def generate(self, prompt, out, cfg, size=(576, 1024)):
+        self.calls.append(prompt)
+        if self.fail:
+            raise RuntimeError("no GPU (simulated)")
+        from PIL import Image
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", size, (30, 90, 160)).save(out, "PNG")
+        return out
 
 
 class FakeTranslator:
@@ -132,7 +155,7 @@ def sample_video(tmp_path_factory) -> Path:
 @pytest.fixture()
 def fakes():
     return Services(transcriber=FakeTranscriber(), llm=FakeLLM(), embedder_factory=lambda cfg: HashEmbedder(),
-                    translator=FakeTranslator())
+                    translator=FakeTranslator(), imagegen=FakeImageGen())
 
 
 def build_client(data_dir: Path, fakes: Services) -> TestClient:
@@ -147,7 +170,8 @@ def client(tmp_path, fakes):
     c = build_client(tmp_path / "data", fakes)
     with c:
         ctx = c.app.state.ctx
-        ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft"})
+        ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft",
+                             "design.engine": "pillow"})      # the browser renderer has its own tests (slow)
         yield c
 
 

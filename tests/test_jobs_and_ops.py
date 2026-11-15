@@ -45,7 +45,7 @@ def test_stage_failure_blocks_dependents_then_retry_recovers(client, ctx, projec
     assert client.post("/api/queue/retry-failed").json()["retried"] == 4
     ctx.queue.drain()
     assert all(j["status"] == "completed" for j in jobs(client, project_id=pid))
-    assert kinds(client, pid)["main_reel"] == 3
+    assert kinds(client, pid)["main_reel"] == 1
     assert client.get(f"/api/projects/{pid}").json()["status"] == "review_required"
     assert client.post(f"/api/jobs/{js['transcription']['id']}/retry").status_code == 409     # already completed
 
@@ -79,14 +79,15 @@ def test_partial_reel_progress_is_kept_and_resumed(client, ctx, project_with_vid
     monkeypatch.setattr(media, "render_reel", flaky)
     client.post(f"/api/projects/{pid}/process", json={"steps": ["transcription", "reel_generation"]})
     ctx.queue.drain()
-    assert kinds(client, pid).get("main_reel") == 2                          # first two survived the failure
+    k0 = kinds(client, pid)
+    assert k0.get("main_reel") == 1 and k0.get("short_reel") == 1             # first two survived the failure (3rd render crashed)
     assert jobs(client, status="failed")[0]["job_type"] == "reel_generation"
     monkeypatch.setattr(media, "render_reel", real)
     client.post("/api/queue/retry-failed")
     before = len(list(ctx.settings.projects_dir.rglob("main_1_v1.mp4")))
     ctx.queue.drain()
     k = kinds(client, pid)
-    assert k["main_reel"] == 3 and k["short_reel"] == 2 and before == 1
+    assert k["main_reel"] == 1 and k["short_reel"] == 2 and before == 1
 
 
 def test_cancel_queued_and_running_jobs(client, ctx, project_with_video, fakes):
@@ -157,13 +158,13 @@ def test_data_survives_application_restart(tmp_path, fakes, sample_video):
     with c2:
         p = c2.get(f"/api/projects/{pid}").json()
         assert p["name"] == "Persist" and p["tags"] == ["keep"] and p["status"] == "review_required"
-        assert p["video"]["duration"] > 190 and p["asset_counts"]["main_reel"] == 3
+        assert p["video"]["duration"] > 190 and p["asset_counts"]["main_reel"] == 1
         a = c2.get(f"/api/assets/{asset['id']}").json()
         assert a["status"] == "approved" and a["has_file"] and c2.get(f"/api/assets/{asset['id']}/file").status_code == 200
         assert c2.get("/api/settings").json()["values"]["whisper.model"] == "tiny"
         assert c2.get("/api/memory/search?q=free gift of grace").json()["hits"]            # vectors persisted
         assert c2.get(f"/api/projects/{pid}/transcript").json()["exists"]
-        assert c2.get("/api/dashboard").json()["metrics"]["reels_generated"] == 5
+        assert c2.get("/api/dashboard").json()["metrics"]["reels_generated"] == 3
 
 
 def test_interrupted_job_is_requeued_and_finishes_after_restart(tmp_path, fakes, sample_video):
@@ -200,7 +201,7 @@ def test_backup_and_restore_roundtrip_in_place(client, ctx, processed):
     assert r.status_code == 200, r.text
     assert r.json()["safety_backup"].endswith("pre-restore.zip")
     p = client.get(f"/api/projects/{pid}").json()
-    assert p["name"] == "Sunday Grace" and p["asset_counts"]["main_reel"] == 3
+    assert p["name"] == "Sunday Grace" and p["asset_counts"]["main_reel"] == 1
     a = client.get(f"/api/assets/{reel['id']}").json()
     assert a["status"] == "approved" and a["has_file"]
     assert client.get(f"/api/assets/{reel['id']}/file").status_code == 200
@@ -279,7 +280,7 @@ def test_translator_failure_is_recorded_and_other_outputs_survive(client, ctx, p
     j = client.get(f"/api/jobs/{jid}").json()
     assert j["status"] == "failed" and "translator crashed" in j["error"]
     assert client.get(f"/api/projects/{processed}").json()["translations"][0]["status"] == "failed"
-    assert kinds(client, processed)["main_reel"] == 3                       # nothing else lost
+    assert kinds(client, processed)["main_reel"] == 1                       # nothing else lost
 
 
 # ------------------------------ translator bridge ------------------------------

@@ -43,9 +43,27 @@ Your data lives in `ruha_data\` (or `RUHA_DATA_DIR` from `.env`). The first Whis
    fonts, watermark, intro/outro. **Analytics** for real production statistics (CSV/JSON export).
 6. **Settings → Backup & restore** for full backups (database + brand + project files).
 
+**What a sermon produces** (all in the theme of the message, with a matching background such as flames, rays, waves or stars):
+1 main reel, 2 short reels, 1 highlight poster and 2 encouragement posts. Posters and posts carry only a short hook line plus
+the verse the speaker actually cited. Every reel opens with a hook image, has creative subtitles (English by default, or the
+language you pick) and ends with a closing image.
+
+**Shortcuts:** *Dashboard → Paste video link* downloads a YouTube video and runs everything automatically (only for videos you own
+or have permission to use). A project's **Reel from images** builds a reel from uploaded pictures. **Review this project** and
+**Open in library** show that project's work; Review and Library also have a project filter and review-status filters.
+
 Translate / dub: *Dashboard → Translate video* (or a project's **Translate / dub** button). It runs the existing translator
 in its own Python environment (`RUHA_TRANSLATOR_DIR`, default `C:\Dev\indic-video-translator`) and files the results
 (video, translated subtitles, dub audio) into the project.
+
+## Poster design
+
+Posters, posts and reel cards are rendered from HTML/CSS using the Microsoft Edge / Google Chrome already on the PC (set
+`RUHA_BROWSER` to use another Chromium-based browser). Fonts are bundled (all SIL Open Font License), so output looks the same
+everywhere and Indian-language text is shaped correctly. Without a browser the app falls back to its built-in renderer.
+
+Optional **AI-generated backgrounds** (Settings > Design): needs an NVIDIA GPU and
+`.venv\Scripts\python.exe -m pip install -r requirements-gpu.txt`; the model (about 7 GB) downloads once, then runs offline.
 
 ## Hardware notes (RTX 3060 / 16 GB RAM)
 
@@ -71,7 +89,18 @@ deterministic fakes. See `docs/CHECKLIST.md` for exactly what is and is not veri
 * `docs/LEGACY_STREAMLIT_MVP.md` - the earlier Streamlit prototype, still runnable with `run.bat`
 * API docs: <http://127.0.0.1:8765/docs> while the app is running
 
-Developed and created by **Abhishek Surya Doppalapudi**.
+## Protecting the code
+
+This is proprietary software (see `LICENSE`: all rights reserved, no copying or redistribution). Practical steps:
+
+* Keep the GitHub repository **private** and only add people you trust as collaborators. Nobody can clone a private repository.
+* Never commit `.env`, `ruha_data/`, or anything with personal data (already in `.gitignore`).
+* The app only listens on `127.0.0.1`, so it is not reachable from other computers.
+* No software can fully stop someone who already has a copy of the files from copying them. The license and a private repository
+  are what protect you legally; compiling the Python code (for example with Nuitka) can make casual copying harder if you ever
+  hand the app to other people.
+
+Developed and created by **Abhishek Surya Doppalapudi**. Copyright © 2026, all rights reserved.
 
 The standalone look-and-feel page is index.html (open it directly in a browser); it is separate from this application.
 

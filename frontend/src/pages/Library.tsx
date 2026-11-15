@@ -1,11 +1,12 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Download, LayoutGrid, List, Search, X } from 'lucide-react'
 import { api, Asset, qs } from '../api'
 import { Empty, ErrorBox, Loading, PageHeader, useApi, useDebounced, useToast, fmtBytes } from '../ui'
 import AssetCard from '../components/AssetCard'
 import AssetDetail from '../components/AssetDetail'
 
-const TYPES = [['', 'Everything'], ['video', 'Videos'], ['reel', 'Reels'], ['short', 'Short clips'], ['poster', 'Posters'], ['social', 'Social graphics'], ['transcript', 'Transcripts'],
+const TYPES = [['', 'Everything'], ['video', 'Videos'], ['reel', 'Main reels'], ['short', 'Short reels'], ['image', 'Image reels'], ['poster', 'Posters'], ['social', 'Social graphics'], ['transcript', 'Transcripts'],
   ['subtitle', 'Subtitles'], ['audio', 'Audio'], ['translation', 'Translations']]
 
 export default function LibraryPage() {
@@ -14,12 +15,15 @@ export default function LibraryPage() {
   const [q, setQ] = useState(''); const dq = useDebounced(q)
   const [tag, setTag] = useState('')
   const [status, setStatus] = useState('')
+  const [sp] = useSearchParams()
+  const [project, setProject] = useState(sp.get('project') || '')
+  const projects = useApi(() => api.get<{ items: { id: number; name: string }[] }>('/api/projects?limit=200'), [])
   const [sort, setSort] = useState('created'); const [order, setOrder] = useState('desc')
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('ruha-lib-view') as any) || 'grid')
   const [sel, setSel] = useState<Record<string, boolean>>({})
   const [open, setOpen] = useState<number | null>(null)
   const [dl, setDl] = useState(false)
-  const { data, error, loading, reload } = useApi(() => api.get<{ total: number; items: Asset[] }>(`/api/library${qs({ type, q: dq, tag, status, sort, order, limit: 200 })}`), [type, dq, tag, status, sort, order])
+  const { data, error, loading, reload } = useApi(() => api.get<{ total: number; items: Asset[] }>(`/api/library${qs({ type, q: dq, tag, status, project_id: project, sort, order, limit: 200 })}`), [type, dq, tag, status, project, sort, order])
   const key = (a: Asset) => `${a.entity}:${a.id}`
   const chosen = (data?.items ?? []).filter((a) => sel[key(a)])
 
@@ -42,8 +46,9 @@ export default function LibraryPage() {
         <button className={view === 'grid' ? 'btn-primary' : 'btn-ghost'} onClick={() => setViewMode('grid')} aria-label="Grid view" title="Grid view"><LayoutGrid size={16} /></button>
         <button className={view === 'list' ? 'btn-primary' : 'btn-ghost'} onClick={() => setViewMode('list')} aria-label="List view" title="List view"><List size={16} /></button></>} />
       <div className="flex flex-wrap gap-1.5 mb-4">{TYPES.map(([v, l]) => <button key={v} onClick={() => setType(v)} className={`chip !px-3 !py-1 ${type === v ? 'bg-primary/25 border-primary/60 text-ink' : 'border-line text-muted hover:text-ink'}`}>{l}</button>)}</div>
-      <div className="card p-3 mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="card p-3 mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
         <div className="relative lg:col-span-2"><Search size={15} className="absolute left-3 top-2.5 text-muted" /><input className="input !pl-9" placeholder="Search titles, captions, descriptions…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search library" /></div>
+        <select className="input" value={project} onChange={(e) => setProject(e.target.value)} aria-label="Filter by project"><option value="">All projects</option>{(projects.data?.items ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
         <input className="input" placeholder="Filter by tag" value={tag} onChange={(e) => setTag(e.target.value)} aria-label="Filter by tag" />
         <select className="input" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by review status"><option value="">Any review status</option><option value="draft">Draft</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="revision_requested">Revision requested</option></select>
         <div className="flex gap-2"><select className="input" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort"><option value="created">Newest</option><option value="name">Name</option><option value="size">Size</option><option value="updated">Updated</option></select>
@@ -56,7 +61,7 @@ export default function LibraryPage() {
           <button className="btn-ghost" onClick={() => setSel({})}><X size={15} />Clear</button>
         </div>)}
       {loading && !data ? <Loading rows={4} /> : error && !data ? <ErrorBox error={error} retry={reload} /> : data!.items.length === 0 ? (
-        <Empty title="Nothing in the library" hint={dq || tag || status || type ? 'No items match these filters.' : 'Generated content and uploaded videos will show up here.'} />
+        <Empty title="Nothing in the library" hint={dq || tag || status || type || project ? 'No items match these filters.' : 'Generated content and uploaded videos will show up here.'} />
       ) : (
         <>
           <div className="flex items-center gap-3 mb-2 text-xs text-muted"><label className="flex items-center gap-2"><input type="checkbox" className="accent-[rgb(var(--primary))]" checked={chosen.length === data!.items.length}

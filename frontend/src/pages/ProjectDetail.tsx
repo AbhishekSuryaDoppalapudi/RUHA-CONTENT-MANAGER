@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
+import { Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 import { api, Asset, fileUrl, Job, Project } from '../api'
 import { Empty, ErrorBox, Field, Loading, PageHeader, ProgressBar, Spinner, StatusBadge, Tabs, ago, fmtBytes, fmtDate, fmtDur, label, useApi, useConfirm, useDebounced, useToast, PROJECT_STATUS_OPTIONS } from '../ui'
 import AssetCard from '../components/AssetCard'
 import AssetDetail from '../components/AssetDetail'
-import { RunJobModal } from '../components/Dialogs'
+import { ImageReelModal, RunJobModal } from '../components/Dialogs'
 
 export default function ProjectDetail() {
   const { id } = useParams()
@@ -14,6 +14,7 @@ export default function ProjectDetail() {
   const [tab, setTab] = useState('overview')
   const [open, setOpen] = useState<number | null>(null)
   const [modal, setModal] = useState(false)
+  const [imgModal, setImgModal] = useState(false)
   const { data: p, error, loading, reload } = useApi(() => api.get<Project>(`/api/projects/${pid}`), [pid], 3000)
   const { data: assets, reload: reloadAssets } = useApi(() => api.get<Asset[]>(`/api/assets?project_id=${pid}`), [pid, p?.updated_at, p?.status], 0)
   const [edit, setEdit] = useState<{ name: string; description: string; tags: string; content_type: string } | null>(null)
@@ -39,7 +40,7 @@ export default function ProjectDetail() {
   const act = async (fn: () => Promise<any>, ok: string) => { try { await fn(); toast.ok(ok); reload(); reloadAssets() } catch (e) { toast.err(e) } }
   const startEdit = () => setEdit({ name: p.name, description: p.description, tags: p.tags.join(', '), content_type: p.content_type })
   const group = (kinds: string[]) => (assets ?? []).filter((a) => kinds.includes(a.kind))
-  const sections: [string, string[]][] = [['Main reels', ['main_reel']], ['Short reels', ['short_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
+  const sections: [string, string[]][] = [['Main reels', ['main_reel']], ['Short reels', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
     ['Translations & dubbing', ['translation_video', 'translation_subtitle', 'audio']], ['Transcripts & subtitles', ['transcript', 'subtitle', 'caption']]]
   const total = assets?.length ?? 0
 
@@ -50,6 +51,9 @@ export default function ProjectDetail() {
           <StatusBadge status={p.status} />
           <button className="btn-primary" disabled={!p.video || busy} onClick={() => act(() => api.post(`/api/projects/${pid}/process`, {}), 'Pipeline queued')}><Sparkles size={16} />{busy ? 'Processing…' : total ? 'Run pipeline again' : 'Generate content'}</button>
           <button className="btn-ghost" disabled={!p.video} onClick={() => setModal(true)}><Languages size={16} />Translate / dub</button>
+          <button className="btn-ghost" onClick={() => setImgModal(true)}><ImageIcon size={16} />Reel from images</button>
+          <Link className="btn-ghost" to={`/review?project=${pid}`}>Review this project</Link>
+          <Link className="btn-ghost" to={`/library?project=${pid}`}>Open in library</Link>
         </>} />
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'assets', label: 'Generated content', count: total }, { id: 'transcript', label: 'Transcript' },
         { id: 'jobs', label: 'Jobs', count: p.jobs?.length }, { id: 'history', label: 'History' }]} />
@@ -118,6 +122,7 @@ export default function ProjectDetail() {
         {tab === 'history' && <HistoryTab pid={pid} />}
       </div>
       {open && <AssetDetail id={open} onClose={() => setOpen(null)} onChanged={() => { reload(); reloadAssets() }} />}
+      {imgModal && <ImageReelModal projectId={pid} onClose={() => setImgModal(false)} onDone={() => { reload(); reloadAssets() }} />}
       {modal && <RunJobModal mode="translate" projectId={pid} onClose={() => { setModal(false); reload() }} />}
     </>
   )
