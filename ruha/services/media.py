@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from ruha.security import redact
-from ruha.services.subtitles import build_ass, build_cues, build_srt, cues_to_srt
+from ruha.services.subtitles import build_ass, build_cues, build_srt, cues_to_srt, stage_fonts
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -170,8 +170,11 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
                 crf=23, preset="veryfast", burn_subtitles=True, subtitle_style=None,
                 srt_path=None, watermark=None, intro=None, outro=None, use_gpu=False,
                 cues=None, accent="#FFD166", open_card=None, close_card=None,
-                card_seconds=(2.2, 2.6)) -> Path:
-    """Cut [start, end] from ``source`` into a vertical reel; never touches the source file."""
+                card_seconds=(2.2, 2.6), cutaways=None) -> Path:
+    """Cut [start, end] from ``source`` into a vertical reel; never touches the source file.
+
+    ``cutaways`` = [{"at": seconds into the reel, "dur": seconds, "image": path}]: the picture crossfades to an animated
+    (slow zoom) still for that window while the speaker's audio and the captions carry on."""
     _require()
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -181,25 +184,55 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
     try:
         vf = (f"scale={width}:{height}:force_original_aspect_ratio=increase,"
               f"crop={width}:{height},setsar=1,fps=30")
+        sub_vf = ""
         if burn_subtitles and (cues or segments):
             use_cues = cues if cues is not None else build_cues(segments, start, end, int(style.get("max_chars_per_line", 28)))
             if use_cues and style.get("creative", True):
                 build_ass(use_cues, tmp / "subs.ass", width, height, style, accent)
-                vf += ",ass=subs.ass"
+                sub_vf = "ass=subs.ass" + stage_fonts(tmp)
             elif use_cues:
                 cues_to_srt(use_cues, tmp / "subs.srt")
-                vf += (f",subtitles=subs.srt:original_size={width}x{height}:"
-                       f"force_style='{_force_style(style)}'")
+                sub_vf = (f"subtitles=subs.srt:original_size={width}x{height}:"
+                          f"force_style='{_force_style(style)}'")
+        cutaways = [c for c in (cutaways or []) if c.get("image") and Path(c["image"]).exists()
+                    and 0 <= float(c["at"]) < duration - 0.5]
         main_out = tmp / "main.mp4" if (intro or outro or open_card or close_card) else out
         cmd = ["ffmpeg", "-y", "-ss", f"{max(0.0, start):.3f}", "-i", str(source)]
         has_wm = bool(watermark and Path(watermark).exists())
-        if has_wm:
-            cmd += ["-i", str(watermark)]
-            fc = (f"[0:v]{vf}[base];[1:v]scale={int(width * 0.18)}:-1,format=rgba,"
-                  f"colorchannelmixer=aa=0.75[wm];[base][wm]overlay=W-w-40:70:format=auto[v]")
-            cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"]
+        if cutaways:
+            fc = f"[0:v]{vf}[v0]"
+            last = "v0"
+            for i, c in enumerate(cutaways):
+                d = min(float(c["dur"]), duration - float(c["at"]))
+                fr, fd = max(2, int(round(d * 30))), min(0.35, d / 3)
+                cmd += ["-i", str(c["image"])]
+                z = "min(1+0.0011*on,1.16)" if i % 2 == 0 else "if(eq(on,0),1.16,max(1.16-0.0011*on,1.0))"
+                fc += (f";[{i + 1}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+                       f"crop={width * 2}:{height * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                       f"d={fr}:s={width}x{height}:fps=30,setsar=1,format=yuva420p,"
+                       f"fade=t=in:st=0:d={fd:.2f}:alpha=1,fade=t=out:st={d - fd:.2f}:d={fd:.2f}:alpha=1,"
+                       f"setpts=PTS+{float(c['at']):.3f}/TB[c{i}]"
+                       f";[{last}][c{i}]overlay=eof_action=pass:format=auto[o{i}]")
+                last = f"o{i}"
+            if sub_vf:
+                fc += f";[{last}]{sub_vf}[sb]"
+                last = "sb"
+            if has_wm:
+                cmd += ["-i", str(watermark)]
+                fc += (f";[{len(cutaways) + 1}:v]scale={int(width * 0.18)}:-1,format=rgba,"
+                       f"colorchannelmixer=aa=0.75[wm];[{last}][wm]overlay=W-w-40:70:format=auto[v]")
+                last = "v"
+            cmd += ["-filter_complex", fc, "-map", f"[{last}]", "-map", "0:a?"]
         else:
-            cmd += ["-vf", vf, "-map", "0:v:0", "-map", "0:a?"]
+            if sub_vf:
+                vf += "," + sub_vf
+            if has_wm:
+                cmd += ["-i", str(watermark)]
+                fc = (f"[0:v]{vf}[base];[1:v]scale={int(width * 0.18)}:-1,format=rgba,"
+                      f"colorchannelmixer=aa=0.75[wm];[base][wm]overlay=W-w-40:70:format=auto[v]")
+                cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"]
+            else:
+                cmd += ["-vf", vf, "-map", "0:v:0", "-map", "0:a?"]
         cmd += ["-t", f"{duration:.3f}", *_encoder_args(crf, preset, use_gpu),
                 "-af", "loudnorm=I=-15:TP=-1.5:LRA=11",
                 "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
@@ -278,7 +311,7 @@ def render_image_reel(images, out, *, seconds_per_image: float = 3.5, width=1080
         last = "cat"
         if cues:
             build_ass(cues, tmp / "subs.ass", width, height, style, accent)
-            fc += f";[{last}]ass=subs.ass[sub]"
+            fc += f";[{last}]ass=subs.ass{stage_fonts(tmp)}[sub]"
             last = "sub"
         has_wm = bool(watermark and Path(watermark).exists())
         if has_wm:

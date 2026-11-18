@@ -66,6 +66,14 @@ class FakeLLM:
             self.post_variant += 1
             n = self.post_variant
             return {"posts": [{"hook": f"Fresh hope variant {n}", "caption": f"caption variant {n}", "reference": ""}]}
+        if prompt.startswith("You are the creative director"):
+            return {"message": "God's grace is a free gift", "emotional_theme": "grace", "audience": "people who feel they must earn love",
+                    "visual_metaphors": [{"subject": "an open hand receiving light", "environment": "a quiet field at golden hour"},
+                                         {"subject": "a wooden door ajar with warm light", "environment": "a stone path"},
+                                         {"subject": "a table set with bread and a lamp", "environment": "a simple room at dusk"}],
+                    "headlines": ["Grace is not earned", "Why would God give it free?", "Receive what you cannot repay Romans 8:28"],
+                    "supporting_text": "A free gift for every person John 3:16",
+                    "creative_direction": "Warm, reverent, hopeful"}
         if prompt.startswith("Translate each of these subtitle lines"):
             import json as _j
             lines = _j.loads(prompt.strip().splitlines()[-1])
@@ -112,6 +120,44 @@ class FakeImageGen:
         return out
 
 
+class FakeImages:
+    """Stands in for Stable Diffusion in tests. Draws a different synthetic picture per seed - clearly NOT AI artwork."""
+    name = "fake-images"
+
+    def __init__(self):
+        self.calls = []
+        self.unloads = 0
+        self.up = True
+
+    def status(self, cfg):
+        return {"available": self.up, "reason": "" if self.up else "No image-generation model is available. (test)",
+                "hardware": {"gpu": None, "ram": {"total_gb": 16, "free_gb": 8}, "recommendation": {"model": None}},
+                "backend": "fake", "model": "fake-sd"}
+
+    def generate(self, prompt, negative, size, seed, cfg, progress=None):
+        from ruha.creative.backends import ImageBackendError
+        if not self.up:
+            raise ImageBackendError("No image-generation model is available. (test)")
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFilter
+        self.calls.append({"prompt": prompt, "negative": negative, "size": tuple(size), "seed": seed})
+        rng = np.random.default_rng(seed)
+        w, h = size
+        top, bot = rng.integers(20, 200, 3), rng.integers(20, 200, 3)
+        y = np.linspace(0, 1, h)[:, None, None]
+        arr = (top * (1 - y) + bot * y) * np.ones((1, w, 1))
+        im = Image.fromarray(arr.astype("uint8"))
+        d = ImageDraw.Draw(im)
+        for _ in range(7):
+            x0, y0 = int(rng.integers(0, w)), int(rng.integers(0, h))
+            r = int(rng.integers(w // 10, w // 3))
+            d.ellipse((x0 - r, y0 - r, x0 + r, y0 + r), fill=tuple(int(v) for v in rng.integers(0, 255, 3)))
+        return im.filter(ImageFilter.GaussianBlur(3)), {"backend": "fake", "model": "fake-sd", "model_key": "fake"}
+
+    def unload(self):
+        self.unloads += 1
+
+
 class FakeTranslator:
     def __init__(self):
         self.calls = []
@@ -155,7 +201,8 @@ def sample_video(tmp_path_factory) -> Path:
 @pytest.fixture()
 def fakes():
     return Services(transcriber=FakeTranscriber(), llm=FakeLLM(), embedder_factory=lambda cfg: HashEmbedder(),
-                    translator=FakeTranslator(), imagegen=FakeImageGen())
+                    translator=FakeTranslator(), imagegen=FakeImageGen(),
+                    images=FakeImages())
 
 
 def build_client(data_dir: Path, fakes: Services) -> TestClient:

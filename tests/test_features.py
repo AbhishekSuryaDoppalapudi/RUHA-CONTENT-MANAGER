@@ -1,5 +1,6 @@
 """Themes, creative subtitles + language, hook/closing cards, image reels, link import and project filters."""
 import io
+from pathlib import Path
 import shutil
 
 import pytest
@@ -148,7 +149,7 @@ def test_image_upload_rejects_non_images_and_traversal(client):
 def test_import_url_downloads_then_runs_the_pipeline(client, ctx, sample_video, tmp_path, monkeypatch):
     from ruha.ai import ytdl
 
-    def fake_download(url, out_dir, max_height=720, progress=None):
+    def fake_download(url, out_dir, max_height=720, progress=None, log=None):
         out_dir.mkdir(parents=True, exist_ok=True)
         dst = out_dir / "abc123.mp4"
         shutil.copy2(sample_video, dst)
@@ -257,3 +258,58 @@ def test_ai_prompts_describe_scenes_without_people():
         assert name in imagegen.THEME_SCENES and len(pr) > 40
         assert "person" not in pr.lower() and "face" not in pr.lower()
     assert "face" in imagegen.NEGATIVE and "text" in imagegen.NEGATIVE
+
+
+# ------------------------------- link download robustness ---------------------------
+class _FakeYDL:
+    attempts: list = []
+    plan: list = []
+
+    def __init__(self, opts):
+        self.opts = opts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def extract_info(self, url, download=True):
+        _FakeYDL.attempts.append(self.opts.get("extractor_args"))
+        outcome = _FakeYDL.plan[len(_FakeYDL.attempts) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        Path(self.opts["outtmpl"].replace("%(id)s.%(ext)s", "abc.mp4")).write_bytes(b"x" * 10)
+        return {"id": "abc", "title": "T", "ext": "mp4"}
+
+    def prepare_filename(self, info):
+        return self.opts["outtmpl"].replace("%(id)s", "abc").replace("%(ext)s", "mp4")
+
+
+def _run_download(tmp_path, monkeypatch, plan):
+    import sys
+    import types
+    from ruha.ai import ytdl
+    _FakeYDL.attempts, _FakeYDL.plan = [], plan
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=_FakeYDL))
+    return ytdl, ytdl.download("https://example.com/v", tmp_path, 720)
+
+
+def test_download_retries_another_client_after_a_403(tmp_path, monkeypatch):
+    ytdl, (path, title) = _run_download(tmp_path, monkeypatch, [Exception("HTTP Error 403: Forbidden"), "ok"])
+    assert path.exists() and title == "T"
+    assert _FakeYDL.attempts[0] is None and _FakeYDL.attempts[1]["youtube"]["player_client"]
+
+
+def test_download_gives_a_helpful_message_when_every_client_is_refused(tmp_path, monkeypatch):
+    from ruha.ai import ytdl
+    with pytest.raises(ytdl.DownloadError) as e:
+        _run_download(tmp_path, monkeypatch, [Exception("HTTP Error 403: Forbidden")] * 4)
+    assert "upload the file" in str(e.value) and len(_FakeYDL.attempts) == 4
+
+
+def test_download_does_not_retry_an_unrelated_error(tmp_path, monkeypatch):
+    from ruha.ai import ytdl
+    with pytest.raises(ytdl.DownloadError):
+        _run_download(tmp_path, monkeypatch, [Exception("Unsupported URL")])
+    assert len(_FakeYDL.attempts) == 1

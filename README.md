@@ -56,6 +56,12 @@ Translate / dub: *Dashboard → Translate video* (or a project's **Translate / d
 in its own Python environment (`RUHA_TRANSLATOR_DIR`, default `C:\Dev\indic-video-translator`) and files the results
 (video, translated subtitles, dub audio) into the project.
 
+## Creative Studio
+
+Open **Creative Studio** in the sidebar, choose a transcribed project, review/edit the brief, pick design engines and formats, and press
+Generate. Pictures come from a local image model (needs an NVIDIA GPU: install `requirements-gpu.txt`, or run ComfyUI and set its address in
+Settings > Creative Studio); the app tells you plainly when none is available. Details and limits: `docs/CREATIVE_STUDIO.md`.
+
 ## Poster design
 
 Posters, posts and reel cards are rendered from HTML/CSS using the Microsoft Edge / Google Chrome already on the PC (set

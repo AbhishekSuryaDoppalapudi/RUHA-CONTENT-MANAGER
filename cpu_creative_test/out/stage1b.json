@@ -1,0 +1,23 @@
+{
+  "plan_source": "tester-written stub",
+  "brief_error": null,
+  "brief_perf": {
+    "seconds": 61.1,
+    "free_gb_start": 3.68,
+    "free_gb_min": 1.3,
+    "python_peak_rss_gb": 0.09,
+    "cpu_avg_pct": 70.0,
+    "cpu_max_pct": 98.0,
+    "aborted_for_low_ram": false
+  },
+  "exp_error": null,
+  "exp_perf": {
+    "seconds": 31.4,
+    "free_gb_start": 1.47,
+    "free_gb_min": 1.35,
+    "python_peak_rss_gb": 0.09,
+    "cpu_avg_pct": 80.0,
+    "cpu_max_pct": 98.1,
+    "aborted_for_low_ram": false
+  }
+}

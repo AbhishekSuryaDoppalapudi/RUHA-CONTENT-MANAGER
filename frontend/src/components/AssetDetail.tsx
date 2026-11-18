@@ -50,7 +50,7 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
 
   const isReel = a?.kind === 'main_reel' || a?.kind === 'short_reel' || a?.kind === 'image_reel'
   const isGraphic = a?.kind === 'poster' || a?.kind === 'social_post'
-  const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post'].includes(a.kind)
+  const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post', 'creative'].includes(a.kind)
 
   return (
     <Modal title={a ? `${KIND_LABEL[a.kind] || label(a.kind)} · ${a.slot || ''}` : 'Asset'} onClose={onClose} width="max-w-5xl">

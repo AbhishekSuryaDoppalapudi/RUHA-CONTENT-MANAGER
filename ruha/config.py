@@ -116,6 +116,17 @@ DEFAULT_CONFIG: dict = {
     "reel.music_path": {"category": "export", "value": ""},                 # optional music for image reels
     "reel.hook_card": {"category": "export", "value": True},               # opening hook image
     "reel.closing_card": {"category": "export", "value": True},            # closing image
+    "creative.backend": {"category": "creative", "value": "auto"},           # auto | diffusers | comfyui | none
+    "creative.model": {"category": "creative", "value": "auto"},             # auto | sd15 | sdxl | sdxl-turbo
+    "creative.comfyui_url": {"category": "creative", "value": "http://127.0.0.1:8188"},
+    "creative.comfy_checkpoint": {"category": "creative", "value": ""},
+    "creative.steps": {"category": "creative", "value": 0},                  # 0 = model default
+    "creative.allow_cpu": {"category": "creative", "value": False},          # very slow; off unless you want it
+    "creative.offload": {"category": "creative", "value": "auto"},
+    "creative.max_attempts": {"category": "creative", "value": 2},
+    "creative.show_brand": {"category": "creative", "value": True},
+    "creative.timeout_s": {"category": "creative", "value": 900},
+    "creative.benchmark": {"category": "creative", "value": {}},
     "design.engine": {"category": "design", "value": "html"},              # html (browser, best quality) | pillow
     "design.ai_background": {"category": "design", "value": False},        # needs NVIDIA GPU + requirements-gpu.txt
     "design.ai_model": {"category": "design", "value": "stabilityai/sdxl-turbo"},
@@ -133,9 +144,10 @@ PROJECT_STATUSES = ["draft", "uploaded", "processing", "review_required", "appro
                     "published", "failed", "archived"]
 ASSET_STATUSES = ["draft", "approved", "rejected", "revision_requested"]
 ASSET_KINDS = ["main_reel", "short_reel", "poster", "social_post", "subtitle", "transcript",
-               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel"]
+               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel", "creative"]
 JOB_TYPES = ["transcription", "translation", "dubbing", "reel_generation", "poster_generation",
-             "social_post_generation", "video_rendering", "video_download", "image_reel"]
+             "social_post_generation", "video_rendering", "video_download", "image_reel",
+             "creative_brief", "creative_generation", "creative_benchmark", "yt_narrate", "yt_video"]
 JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled"]
 CALENDAR_STATUSES = ["draft", "approved", "scheduled", "published"]
 

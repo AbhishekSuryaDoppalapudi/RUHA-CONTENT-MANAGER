@@ -145,7 +145,9 @@ def test_normalize_snaps_and_bounds():
 def test_reels_get_hook_and_closing_and_plan_gets_a_theme():
     out = planner.normalize_plan(_plan(visual_theme="warfare"), make_segments(), 200, FULL)
     assert out["visual_theme"] == "warfare"
-    assert out["main_reels"][0]["hook"] == "Grace is free" and out["main_reels"][0]["closing"] == "Receive it"
+    assert out["main_reels"][0]["hook"] == "Grace" and out["main_reels"][0]["closing"] == "Receive it"   # one word
+    assert planner.one_word_hook("In this sermon, we'll explore the intense spiritual battle against Satan") == "Battle"
+    assert planner.one_word_hook("", "hope") == "Hope" and planner.one_word_hook("Breakthrough") == "Breakthrough"
     assert all(r["hook"] and r["closing"] for r in out["short_reels"])        # filled with sensible defaults
     bad = planner.normalize_plan(_plan(visual_theme="nonsense", main_theme="the battle against the enemy"),
                                  make_segments(), 200, FULL)

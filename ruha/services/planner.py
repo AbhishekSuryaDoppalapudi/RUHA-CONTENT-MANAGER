@@ -62,6 +62,41 @@ def _context_block(ctxinfo: dict) -> str:
 
 
 THEME_NAMES = ["warfare", "spirit", "grace", "peace", "hope", "faith", "love", "strength", "growth"]
+
+# A reel opens on ONE bold word. The model is asked for it, but small models often return a sentence or a summary
+# ("In this sermon, we'll explore ..."), so the rule is enforced here: keep a genuine single word, otherwise pick the
+# strongest matching word from the clip's own message, otherwise the sermon's visual theme.
+_HOOK_WORDS = [
+    (r"\b(battle|war|warfare|fight\w*|enem\w+|satan\w*|devil|demon\w*|spirits?|armou?r)\b", "Battle"),
+    (r"\b(grace|forgiv\w+|mercy|pardon\w*)\b", "Grace"),
+    (r"\b(peace|calm|still|rest|storm)\b", "Peace"),
+    (r"\b(hope|future|tomorrow|promise\w*)\b", "Hope"),
+    (r"\b(faith|believ\w+|trust\w*)\b", "Faith"),
+    (r"\b(love|loved|beloved)\b", "Love"),
+    (r"\b(strength|strong|weak\w*|courage|bold)\b", "Strength"),
+    (r"\b(grow\w*|season|mature\w*|patience)\b", "Growth"),
+    (r"\b(pray\w*)\b", "Pray"),
+    (r"\b(wait\w*)\b", "Wait"),
+    (r"\b(repent\w*|return)\b", "Return"),
+    (r"\b(freedom|free|deliver\w*|breakthrough)\b", "Freedom"),
+]
+_THEME_WORD = {"warfare": "Battle", "spirit": "Spirit", "grace": "Grace", "peace": "Peace", "hope": "Hope",
+               "faith": "Faith", "love": "Love", "strength": "Strength", "growth": "Growth"}
+_WEAK_WORDS = {"the", "a", "an", "in", "this", "that", "we", "today", "sermon", "talk", "message", "video", "god",
+               "our", "your", "you", "it", "is", "are", "and", "of", "to", "for", "with", "about", "listen"}
+
+
+def one_word_hook(hook: str, theme: str = "", context: str = "") -> str:
+    """Return a single bold word for a reel's opening card."""
+    h = re.sub(r"[^\w'\- ]", "", str(hook or "")).strip()
+    words = h.split()
+    if len(words) == 1 and words[0].lower() not in _WEAK_WORDS and len(words[0]) > 2:
+        return words[0].capitalize()
+    text = f"{hook} {context}"
+    for rx, word in _HOOK_WORDS:
+        if re.search(rx, text, re.I):
+            return word
+    return _THEME_WORD.get((theme or "").lower(), "Listen")
 N_MAIN, N_SHORT, N_POSTS = 1, 2, 2
 
 PLAN_SCHEMA = """{
@@ -72,8 +107,8 @@ PLAN_SCHEMA = """{
  "themes":["2-6 single or two-word topics"],
  "key_points":["..."],
  "quotes":["exact sentences copied verbatim from the transcript"],
- "main_reels":[{"start":0,"end":60,"hook":"max 8 words","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
- "short_reels":[{"start":0,"end":20,"hook":"max 8 words","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
+ "main_reels":[{"start":0,"end":60,"hook":"ONE bold word only, e.g. Battle","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
+ "short_reels":[{"start":0,"end":20,"hook":"ONE bold word only, e.g. Grace","closing":"max 8 words","reason":"...","caption":"...","hashtags":["#..."]}],
  "poster":{"hook":"max 8 words","verse":"reference the speaker cited, else empty","verse_text":"the verse words exactly as spoken, else empty","theme":"..."},
  "encouragement_posts":[{"hook":"max 10 words","reference":"","caption":"..."}],
  "hashtags":["#..."]
@@ -260,7 +295,9 @@ def normalize_plan(plan: dict, segments: list, duration: float, full_text: str) 
     out["encouragement_posts"] = normalize_posts(plan.get("encouragement_posts") or [], full_text, N_POSTS)
     for key in ("main_reels", "short_reels"):                # a reel always has a hook to open with
         for r in out[key]:
-            r["hook"] = r["hook"] or out["poster"]["headline"]
+            r["hook"] = one_word_hook(r["hook"], out["visual_theme"],
+                                      " ".join([r.get("reason", ""), r.get("caption", ""), out["main_theme"],
+                                                " ".join(out["themes"])]))
             r["closing"] = r["closing"] or "Follow for more"
     return out
 

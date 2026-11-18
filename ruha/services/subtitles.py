@@ -110,10 +110,128 @@ NL = chr(92) + "N"                    # ASS hard line break
 POP = "{" + chr(92) + "an2" + chr(92) + "fad(110,70)" + chr(92) + "fscx86" + chr(92) + "fscy86" + chr(92) + "t(0,170," + chr(92) + "fscx100" + chr(92) + "fscy100)}"
 
 
+FONT_SMALL, FONT_KEY = "Poppins SemiBold", "Poppins ExtraBold"
+FONT_FILES = ("Poppins-SemiBold.ttf", "Poppins-ExtraBold.ttf", "Poppins-Bold.ttf")
+_STOP = set("""about with that this they them then when what have from were will your been there their would could
+should because into than also just very some more most such only over under after before while where which these
+those here does done"""
+            .split())
+_POWER = {"god", "lord", "love", "hope", "fear", "sin", "war", "pray", "fire", "life", "grace", "cross", "blood"}
+_TRIM =".,!?;:'\"“”‘’()"
+
+
+def stage_fonts(dest) -> str:
+    """Copy the bundled caption fonts next to the subtitle file; returns the ``fontsdir`` filter option."""
+    import shutil
+    src = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+    d = Path(dest) / "capfonts"
+    d.mkdir(parents=True, exist_ok=True)
+    for f in FONT_FILES:
+        if (src / f).exists():
+            shutil.copy2(src / f, d / f)
+    return ":fontsdir=capfonts"
+
+
+def _groups(words: list, per: int = 4) -> list:
+    """Even-sized phrases of at most ``per`` words (a caption flashes a few words at a time)."""
+    n = len(words)
+    k = max(1, -(-n // per))
+    base, extra = divmod(n, k)
+    out, i = [], 0
+    for g in range(k):
+        size = base + (1 if g < extra else 0)
+        out.append(words[i:i + size])
+        i += size
+    return [g for g in out if g]
+
+
+def _key_index(words: list) -> int:
+    """The word that gets the big treatment: the last meaningful word of the phrase."""
+    plain = [w.strip(_TRIM).lower().replace("'", "").replace("’", "") for w in words]
+    for i in range(len(words) - 1, -1, -1):
+        if plain[i] in _POWER or (len(plain[i]) >= 5 and plain[i] not in _STOP):
+            return i
+    best = max(range(len(words)), key=lambda i: (len(plain[i]), i))        # nothing strong: the longest word
+    return best
+
+
+def _stack_cues(cues) -> list:
+    """Split every cue into short phrases with their own time slice: [(start, end, [words])]."""
+    out = []
+    for a, b, text in cues:
+        words = text.replace("\n", " ").split()
+        if not words:
+            continue
+        groups = _groups(words)
+        total = sum(len(" ".join(g)) for g in groups) or 1
+        t = a
+        for g in groups:
+            d = (b - a) * len(" ".join(g)) / total
+            out.append((t, t + d, g))
+            t += d
+    return out
+
+
+def _build_ass_stack(cues, path, width, height, style, accent) -> Path:
+    """Stacked captions: small supporting words on top, ONE big keyword beneath, glow, white/gold keywords alternating."""
+    st = style or {}
+    size = int(st.get("size", 78))
+    margin_v = int(st.get("margin_v", 300))
+    small_fs, key_fs = int(size * 0.72), int(size * 2.0)
+    white, gold = "FFFFFF", (accent or "#F2B84B").lstrip("#")
+    bgr = lambda h: h[4:6] + h[2:4] + h[0:2]
+    maxw = width * 0.86
+    B = chr(92)
+    head = (
+        "[Script Info]\nScriptType: v4.00+\nWrapStyle: 2\nScaledBorderAndShadow: yes\n"
+        f"PlayResX: {width}\nPlayResY: {height}\n\n"
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Stack,{FONT_SMALL},{small_fs},&H00FFFFFF,&H000000FF,&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,0,0,2,70,70,{margin_v},1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    lines = []
+    for n, (a, b, words) in enumerate(_stack_cues(cues)):
+        k = _key_index(words)
+        pre, key, post = " ".join(words[:k]), words[k].strip(_TRIM), " ".join(words[k + 1:])
+        col = white if n % 2 == 0 else gold
+        kfs = int(min(key_fs, maxw / (0.64 * max(1, len(key)))))
+        sfs_pre = int(min(small_fs, maxw / (0.60 * max(1, len(pre))))) if pre else small_fs
+        sfs_post = int(min(small_fs, maxw / (0.60 * max(1, len(post))))) if post else small_fs
+
+        def body(layer: int) -> str:
+            def run(txt, font, fs, colour):
+                if layer == 0:        # dark halo: keeps the words readable on bright pictures
+                    t = f"{B}1a&HFF&{B}bord18{B}blur16{B}3c&H000000&{B}3a&H78&"
+                elif layer == 1:      # coloured glow
+                    t = f"{B}1a&HFF&{B}bord9{B}blur9{B}3c&H{bgr(colour)}&{B}3a&H70&"
+                else:                 # the crisp letters
+                    t = f"{B}1c&H{bgr(colour)}&{B}1a&H00&{B}bord0{B}blur0.4{B}shad3{B}4c&H000000&{B}4a&H90&"
+                return "{" + f"{B}fn{font}{B}fs{fs}{t}" + "}" + txt
+            parts = []
+            if pre:
+                parts.append(run(pre, FONT_SMALL, sfs_pre, white))
+            parts.append(run(key, FONT_KEY, kfs, col))
+            if post:
+                parts.append(run(post, FONT_SMALL, sfs_post, white))
+            return (B + "N").join(parts)
+
+        for layer in (0, 1, 2):
+            lines.append(f"Dialogue: {layer},{_ass_time(a)},{_ass_time(b)},Stack,,0,0,0,,{POP}{body(layer)}")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(head + "\n".join(lines) + "\n", encoding="utf-8-sig")
+    return path
+
+
 def build_ass(cues, path, width: int = 1080, height: int = 1920, style: dict | None = None,
               accent: str = "#FFD166") -> Path:
-    """Creative captions: big bold uppercase text, pop-in animation, keywords in the accent colour."""
+    """Creative captions. Latin text uses the stacked 'small words + one big keyword' look; other scripts keep
+    the classic bold style (their fonts are different). ``caption_style: classic`` forces the classic look."""
     st = style or {}
+    cues = list(cues)
+    if st.get("caption_style", "stack") == "stack" and cues and all(_is_latin(t) for _, _, t in cues):
+        return _build_ass_stack(cues, path, width, height, st, accent)
     size = int(st.get("size", 78))
     margin_v = int(st.get("margin_v", 300))
     font_latin = st.get("font", "Segoe UI Black")

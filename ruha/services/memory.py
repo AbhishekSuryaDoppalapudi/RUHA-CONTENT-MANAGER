@@ -195,7 +195,7 @@ class MemoryStore:
     def index_asset(self, asset_id: int) -> None:
         with self.ctx.db.session() as s:
             a = s.get(GeneratedAsset, asset_id)
-            if not a or a.kind not in ("main_reel", "short_reel", "image_reel", "poster", "social_post"):
+            if not a or a.kind not in ("main_reel", "short_reel", "image_reel", "poster", "social_post", "creative"):
                 return
             kind = "post" if a.kind in ("social_post", "poster") else "caption"
             if a.kind == "social_post":      # same representation the duplicate check compares against

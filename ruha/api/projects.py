@@ -139,6 +139,8 @@ def delete_project(pid: int, confirm: bool = Query(False), ctx=Depends(app_ctx))
         p = get_or_404(s, Project, pid, "Project")
         info = svc.delete(ctx, s, p)
     clean = svc.finish_delete(ctx, info)
+    from ruha.services import brand as brand_svc
+    brand_svc.forget_project_kit(ctx, pid)            # a reused project id must not inherit the old logo/texts
     return {"deleted": pid, "files_removed": clean}
 
 

@@ -1,8 +1,8 @@
-import { Captions, FileAudio, FileText, Film, Image as ImageIcon, Languages, MessageSquareQuote, Play, Video as VideoIcon } from 'lucide-react'
+import { Captions, FileAudio, FileText, Film, Image as ImageIcon, Languages, MessageSquareQuote, Play, Trash2, Video as VideoIcon } from 'lucide-react'
 import { Asset, fileUrl } from '../api'
 import { StatusBadge, fmtBytes, fmtDur, label } from '../ui'
 
-export const KIND_LABEL: Record<string, string> = {
+export const KIND_LABEL: Record<string, string> = { creative: 'Creative',
   main_reel: 'Main reel', short_reel: 'Short reel', image_reel: 'Image reel', poster: 'Poster', social_post: 'Social post', subtitle: 'Subtitles',
   transcript: 'Transcript', caption: 'Captions', translation_video: 'Translation', translation_subtitle: 'Translated subtitles',
   audio: 'Audio', video: 'Source video',
@@ -34,9 +34,13 @@ export function Thumb({ a, className = '' }: { a: Asset; className?: string }) {
   )
 }
 
-export default function AssetCard({ a, onOpen, selected, onSelect, view = 'grid' }: {
-  a: Asset; onOpen: () => void; selected?: boolean; onSelect?: (v: boolean) => void; view?: 'grid' | 'list'
+export default function AssetCard({ a, onOpen, selected, onSelect, onDelete, view = 'grid' }: {
+  a: Asset; onOpen: () => void; selected?: boolean; onSelect?: (v: boolean) => void; onDelete?: () => void; view?: 'grid' | 'list'
 }) {
+  const trash = onDelete && (
+    <button type="button" className="rounded-lg bg-bg/80 border border-line p-1.5 text-muted hover:text-danger hover:border-danger/60 transition"
+      title="Delete" aria-label={`Delete ${a.title || 'item'}`} onClick={(e) => { e.stopPropagation(); onDelete() }}><Trash2 size={14} /></button>
+  )
   const dur = a.meta?.duration ?? a.duration
   const meta = [KIND_LABEL[a.kind] || label(a.kind), dur ? fmtDur(dur) : '', a.size_bytes ? fmtBytes(a.size_bytes) : '', a.version > 1 ? `v${a.version}` : ''].filter(Boolean).join(' · ')
   const select = onSelect && (
@@ -50,6 +54,7 @@ export default function AssetCard({ a, onOpen, selected, onSelect, view = 'grid'
         <Thumb a={a} className="h-14 w-14 rounded-xl shrink-0" />
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{a.title || '(untitled)'}</p><p className="text-xs text-muted truncate">{a.project_name} · {meta}</p></div>
         <StatusBadge status={a.status} />
+        {trash}
       </div>
     )
   }
@@ -59,6 +64,7 @@ export default function AssetCard({ a, onOpen, selected, onSelect, view = 'grid'
         <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel' ? 'aspect-[9/12]' : 'aspect-[4/3]'}`} />
         {select && <div className="absolute top-2 left-2 bg-bg/70 rounded p-1">{select}</div>}
         <div className="absolute top-2 right-2"><StatusBadge status={a.status} /></div>
+        {trash && <div className="absolute bottom-2 right-2">{trash}</div>}
       </div>
       <div className="p-3">
         <p className="text-sm font-medium line-clamp-2 min-h-[2.5rem]">{a.title || '(untitled)'}</p>

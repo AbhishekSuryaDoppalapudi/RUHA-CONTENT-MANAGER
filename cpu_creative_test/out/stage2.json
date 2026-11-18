@@ -1,0 +1,285 @@
+{
+  "image_status": {
+    "available": false,
+    "reason": "No image-generation model is available. comfyui: ComfyUI is not reachable at http://127.0.0.1:8188 (URLError) | diffusers: Local image generation is not installed. Run: .venv\\Scripts\\python.exe -m pip install -r requirements-gpu.txt",
+    "hardware": {
+      "gpu": null,
+      "ram": {
+        "total_gb": 15.3,
+        "free_gb": 4.1
+      },
+      "recommendation": {
+        "model": null,
+        "reason": "No NVIDIA GPU detected. Image generation on the CPU is possible but takes many minutes per picture; it is off unless you enable it in Settings.",
+        "offload": null
+      }
+    }
+  },
+  "image_generate": "ImageBackendError: No image-generation model is available. comfyui: ComfyUI is not reachable at http://127.0.0.1:8188 (URLError) | diffusers: Local image generation is not installed. Run: .venv\\Scripts\\python.exe -m pip install -r requirements-gpu.txt",
+  "renders": [
+    {
+      "id": "main1",
+      "label": "Main reel cover 1",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "cinematic",
+      "zone": "lower-left",
+      "headline": "What's the Thorn in Your Flesh?",
+      "supporting": "Transformed by Your Weakness",
+      "subject": "cracked clay pot",
+      "environment": "light shining through the cracks",
+      "lighting": "golden hour backlight breaking through storm clouds",
+      "palette": "warm gold and soft cream",
+      "composition": "subject in the upper two thirds of the frame, calm uncluttered darker foreground in the lower third",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 5.7,
+      "qc_passed": false,
+      "qc_failed": [
+        "image_not_flat"
+      ],
+      "qc_warn": [],
+      "file": "main1_reel_cover_cinematic.png"
+    },
+    {
+      "id": "main2",
+      "label": "Main reel cover 2",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "editorial",
+      "zone": "upper-left",
+      "headline": "Your Weakness is the Key to His",
+      "supporting": "Transformed by Your Weakness",
+      "subject": "closed bag",
+      "environment": "door",
+      "lighting": "soft diffused window light",
+      "palette": "warm gold and soft cream",
+      "composition": "subject low in the frame, open sky or empty space across the upper half",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 6.0,
+      "qc_passed": false,
+      "qc_failed": [
+        "image_not_flat",
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "main2_reel_cover_editorial.png"
+    },
+    {
+      "id": "main3",
+      "label": "Main reel cover 3",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "fineart",
+      "zone": "upper-center",
+      "headline": "Bring Your Weakness to the Altar",
+      "supporting": "",
+      "subject": "clenched fist",
+      "environment": "open hands",
+      "lighting": "chiaroscuro lighting",
+      "palette": "warm gold and soft cream",
+      "composition": "subject low in the frame, open sky or empty space across the upper half",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 5.4,
+      "qc_passed": false,
+      "qc_failed": [
+        "image_not_flat",
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "main3_reel_cover_fineart.png"
+    },
+    {
+      "id": "short1",
+      "label": "Short reel cover 1",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "modern",
+      "zone": "lower-left",
+      "headline": "When your strength fades, His shines brighter",
+      "supporting": "",
+      "subject": "cracked clay pot",
+      "environment": "light shining through the cracks",
+      "lighting": "clean sunrise light, long shadows",
+      "palette": "warm gold and soft cream",
+      "composition": "subject in the upper two thirds of the frame, calm uncluttered darker foreground in the lower third",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 5.1,
+      "qc_passed": false,
+      "qc_failed": [
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "short1_reel_cover_modern.png"
+    },
+    {
+      "id": "short2",
+      "label": "Short reel cover 2",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "movie",
+      "zone": "lower-center",
+      "headline": "Surrendering isn't giving up, it's trusting",
+      "supporting": "",
+      "subject": "closed bag",
+      "environment": "door",
+      "lighting": "hard rim light with orange backlight",
+      "palette": "warm gold and soft cream",
+      "composition": "subject in the upper two thirds of the frame, calm uncluttered darker foreground in the lower third",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 5.1,
+      "qc_passed": false,
+      "qc_failed": [
+        "image_not_flat",
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "short2_reel_cover_movie.png"
+    },
+    {
+      "id": "poster",
+      "label": "Highlight poster",
+      "format": "poster",
+      "size": [
+        1080,
+        1350
+      ],
+      "style": "biblical",
+      "zone": "lower-center",
+      "headline": "God’s Strength Through Our Weakness",
+      "supporting": "Embrace Your Vulnerability for His Power",
+      "subject": "clenched fist",
+      "environment": "open hands",
+      "lighting": "warm sunrise raking across the hills",
+      "palette": "warm gold and soft cream",
+      "composition": "subject in the upper two thirds of the frame, calm uncluttered darker foreground in the lower third",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 4.3,
+      "qc_passed": false,
+      "qc_failed": [
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "poster_poster_biblical.png"
+    },
+    {
+      "id": "post1",
+      "label": "Encouragement post 1 (feed)",
+      "format": "feed_post",
+      "size": [
+        1080,
+        1350
+      ],
+      "style": "emotional",
+      "zone": "lower-center",
+      "headline": "Let Go of Pretense: Embrace Your True Self",
+      "supporting": "God doesn’t need us to pretend. Let your true self shine, and see His strength in you.",
+      "subject": "cracked clay pot",
+      "environment": "light shining through the cracks",
+      "lighting": "warm late-afternoon window light",
+      "palette": "warm gold and soft cream",
+      "composition": "subject in the upper two thirds of the frame, calm uncluttered darker foreground in the lower third",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 4.4,
+      "qc_passed": false,
+      "qc_failed": [
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "post1_feed_post_emotional.png"
+    },
+    {
+      "id": "post2",
+      "label": "Encouragement post 2 (square)",
+      "format": "square_post",
+      "size": [
+        1080,
+        1080
+      ],
+      "style": "minimal",
+      "zone": "upper-left",
+      "headline": "Honest Prayer: The Key to His Power",
+      "supporting": "Pray with sincerity, and watch His power transform your life.",
+      "subject": "closed bag",
+      "environment": "door",
+      "lighting": "flat tonal field",
+      "palette": "warm gold and soft cream",
+      "composition": "subject low in the frame, open sky or empty space across the upper half",
+      "plate": "typographic field (engine-native)",
+      "seconds": 3.3,
+      "qc_passed": true,
+      "qc_failed": [],
+      "qc_warn": [],
+      "file": "post2_square_post_minimal.png"
+    },
+    {
+      "id": "thumb",
+      "label": "YouTube thumbnail",
+      "format": "thumbnail",
+      "size": [
+        1280,
+        720
+      ],
+      "style": "movie",
+      "zone": "left-half",
+      "headline": "When Your Strength Ends",
+      "supporting": "",
+      "subject": "clenched fist",
+      "environment": "open hands",
+      "lighting": "hard rim light with orange backlight",
+      "palette": "warm gold and soft cream",
+      "composition": "subject on the right side of the frame, calm empty space on the left half",
+      "plate": "SYNTHETIC procedural plate (not AI/photo)",
+      "seconds": 3.8,
+      "qc_passed": false,
+      "qc_failed": [
+        "image_not_flat",
+        "duplicate_visual"
+      ],
+      "qc_warn": [],
+      "file": "thumb_thumbnail_movie.png"
+    },
+    {
+      "id": "minimal_reel",
+      "label": "Typographic reel cover (minimal, real path)",
+      "format": "reel_cover",
+      "size": [
+        1080,
+        1920
+      ],
+      "style": "minimal",
+      "zone": "upper-left",
+      "headline": "What's the Thorn in Your Flesh?",
+      "supporting": "",
+      "subject": "cracked clay pot",
+      "environment": "light shining through the cracks",
+      "lighting": "flat tonal field",
+      "palette": "warm gold and soft cream",
+      "composition": "subject low in the frame, open sky or empty space across the upper half",
+      "plate": "typographic field (engine-native)",
+      "seconds": 4.0,
+      "qc_passed": false,
+      "qc_failed": [
+        "duplicate_text"
+      ],
+      "qc_warn": [
+        "duplicate_visual: Similar to another creative (distance 9/64)"
+      ],
+      "file": "minimal_reel_reel_cover_minimal.png"
+    }
+  ]
+}

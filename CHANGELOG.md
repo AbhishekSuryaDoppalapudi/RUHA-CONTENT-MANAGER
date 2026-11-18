@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - Creative Studio (Creative Engine 2.0)
+- **New Creative Studio page** (sidebar): content source, editable creative brief written from the transcript, eight design engines,
+  eight formats (reel cover, feed, square, YouTube thumbnail, carousel, poster, hook image), three-concept comparison, full-size preview with
+  quality-check detail, headline editor, regenerate, download, approve/reject, history. Nothing is ever auto-approved.
+- **Two-stage pipeline:** a text-free picture from a local image model (Stable Diffusion via diffusers, or ComfyUI), then professional typography
+  drawn on a transparent layer in the browser. Models run one at a time and are unloaded afterwards; hardware gate + benchmark.
+- **Quality control on real pixels:** fits, safe margins, clipping, contrast against the picture beneath, duplicates, scripture integrity.
+- No image model installed: the app says so plainly; only the typographic engine runs (labelled as typographic, not AI artwork).
+- See `docs/CREATIVE_STUDIO.md` for the audit of the old engine, architecture, model evaluation and what is/is not verified.
+
 ## Unreleased - poster engine, fonts, audio
 - **Posters, posts and reel hook/closing cards are now drawn as HTML/CSS** and captured with the installed Edge/Chrome (no extra
   download). Real typography, glow, shadows, correct Telugu/Hindi/Tamil/... shaping. Falls back to the built-in Pillow renderer

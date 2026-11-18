@@ -65,6 +65,7 @@ class Services:
     llm: object = field(default_factory=OllamaLLM)
     embedder_factory: object = make_embedder
     translator: object = None  # set in AppContext (needs settings)
+    images: object = field(default_factory=lambda: __import__("ruha.creative.backends", fromlist=["x"]).ImageService())
     imagegen: object = field(default_factory=lambda: __import__("ruha.ai.imagegen", fromlist=["x"]).DiffusersBackground())
 
 

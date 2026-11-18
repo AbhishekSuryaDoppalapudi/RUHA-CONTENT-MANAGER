@@ -33,6 +33,11 @@ def register(queue):
         "dubbing": h_translate,
         "video_download": h_download,
         "image_reel": h_image_reel,
+        "yt_narrate": lambda app, jc: h_yt_narrate(app, jc),
+        "yt_video": lambda app, jc: h_yt_video(app, jc),
+        "creative_brief": lambda app, jc: __import__("ruha.creative.studio", fromlist=["x"]).h_brief(app, jc),
+        "creative_generation": lambda app, jc: __import__("ruha.creative.studio", fromlist=["x"]).h_generation(app, jc),
+        "creative_benchmark": lambda app, jc: __import__("ruha.creative.studio", fromlist=["x"]).h_benchmark(app, jc),
     })
 
 
@@ -89,7 +94,7 @@ def ensure_plan(app, jc, force: bool = False):
 
 
 def _brand_for_render(app, jc):
-    b = brand_svc.get_brand(app)
+    b = brand_svc.get_brand(app, jc.project_id)
     cfg = jc.cfg
     return b, {
         "watermark": b["watermark"] if cfg.get("render.apply_watermark", True) else None,
@@ -205,12 +210,31 @@ def _reel_cards(app, jc, ws, slot, clip, plan, theme, brand, version=1):
     verse = (plan.get("poster") or {}).get("subheadline", "")
     op = cl = None
     if jc.cfg.get("reel.hook_card", True):
-        op = render_card(ws / "cards" / f"{slot}_open_v{version}.png", clip.get("hook") or plan.get("title", ""),
-                         theme, bd, "open", verse, size=_card_size(jc))
+        from ruha.services.planner import one_word_hook      # older stored plans may hold a sentence
+        word = one_word_hook(clip.get("hook", ""), theme, f"{plan.get('main_theme', '')} {clip.get('reason', '')}")
+        op = render_card(ws / "cards" / f"{slot}_open_v{version}.png", word, theme, bd, "open", verse,
+                         size=_card_size(jc))
     if jc.cfg.get("reel.closing_card", True):
         cl = render_card(ws / "cards" / f"{slot}_close_v{version}.png", "", theme, bd, "close", verse,
-                         clip.get("closing") or "Follow for more", size=_card_size(jc))
+                         brand_svc.closing_text(brand, clip.get("closing") or "Follow for more"), size=_card_size(jc))
     return op, cl
+
+
+def _cutaways(app, jc, ws, slot, version, segs, start, end, theme) -> list:
+    """Animated example/transition scenes cut into the teaching of a MAIN reel (not shorts). [] when off or too short."""
+    if not theme or not slot.startswith("main_") or not jc.cfg.get("reel.cutaways", True):
+        return []
+    from ruha.services import cutaways as cw
+    out = []
+    accent = _theme_accent(theme)
+    for i, c in enumerate(cw.pick(segs, start, end, float(jc.cfg.get("reel.cutaway_seconds", cw.DEFAULT_SECONDS)),
+                                  int(jc.cfg.get("reel.cutaway_max", cw.MAX_CUTAWAYS))), 1):
+        bg = None                                   # the one cached AI picture per theme, never a new generation per cutaway
+        if app.config.get("design.ai_background", False):
+            bg = _ai_background(app, ws, theme, "")
+        img = cw.scene_image(ws / "cutaways" / f"{slot}_v{version}_{i}.png", theme, c["text"], _card_size(jc), accent, bg)
+        out.append({**c, "image": str(img)})
+    return out
 
 
 # ----------------------------- reel from uploaded images -----------------------
@@ -244,7 +268,10 @@ def h_image_reel(app, jc):
         tr = iter(_translate_lines(app, jc, shown, language))
         captions = [next(tr) if c else "" for c in captions]
     cues = [(i * seconds + 0.2, (i + 1) * seconds - 0.2, c) for i, c in enumerate(captions[:len(files)]) if c]
-    brand = brand_svc.get_brand(app)
+    brand = brand_svc.get_brand(app, jc.project_id)
+    if not (jc.params.get("closing") or "").strip():
+        closing = brand_svc.closing_text(brand, closing)          # the project's own closing line, if uploaded
+    img_caption, img_tags = brand_svc.with_texts(brand, jc.params.get("caption", ""), list(plan.get("hashtags", []))[:8])
     args = _render_args(app, jc)
     bd = _brand_for_design(brand, app, ws, theme, hook)
     size = _card_size(jc)
@@ -270,8 +297,8 @@ def h_image_reel(app, jc):
         sa = asset_svc.register(app, s, jc.project_id, "subtitle", srt, slot=f"{slot}_srt",
                                 title=f"Captions - {slot}", job_id=jc.job_id, meta={"language": language})
         a = asset_svc.register(app, s, jc.project_id, "image_reel", out, slot=slot, title=hook[:200],
-                               description=f"Reel made from {len(files)} image(s)", caption=jc.params.get("caption", ""),
-                               hashtags=list(plan.get("hashtags", []))[:8], job_id=jc.job_id, preview_path=thumb,
+                               description=f"Reel made from {len(files)} image(s)", caption=img_caption,
+                               hashtags=img_tags, job_id=jc.job_id, preview_path=thumb,
                                meta={"images": [f.name for f in files], "seconds_per_image": seconds,
                                      "visual_theme": theme, "language": language, "closing": closing,
                                      "duration": round(seconds * len(files), 2), "width": args["width"],
@@ -298,7 +325,8 @@ def h_download(app, jc):
     tmp_dir = app.settings.tmp_dir / f"dl_{jc.job_id}"
     try:
         path, title = ytdl.download(url, tmp_dir, int(jc.cfg.get("download.max_height", 720)),
-                                    progress=lambda f: jc.progress(0.02 + f * 0.9, "Downloading video"))
+                                    progress=lambda f: jc.progress(0.02 + f * 0.9, "Downloading video"),
+                                    log=lambda m: jc.log(m, "WARNING"))
     except ytdl.DownloadError as e:
         raise RuntimeError(str(e))
     jc.progress(0.95, "Checking the video", force=True)
@@ -434,8 +462,9 @@ def h_reels(app, jc):
         theme = _theme_for(app, jc, plan)
         cues, language = _localized_cues(app, jc, segs, clip["start"], clip["end"], src_lang, args["subtitle_style"])
         op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data)
+        cuts = _cutaways(app, jc, proj["ws"], slot, 1, segs, clip["start"], clip["end"], theme)
         media.render_reel(v["path"], clip["start"], clip["end"], out, segments=segs, cues=cues, open_card=op,
-                          close_card=cl, accent=_theme_accent(theme), **args, **extras)
+                          close_card=cl, accent=_theme_accent(theme), cutaways=cuts, **args, **extras)
         srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v1.srt")
         thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}.jpg", at=min(1.0, (clip["end"] - clip["start"]) / 2))
         with app.db.session() as s:
@@ -448,15 +477,16 @@ def h_reels(app, jc):
             sa = asset_svc.register(app, s, jc.project_id, "subtitle", srt, slot=f"{slot}_srt",
                                     title=f"Subtitles - {slot}", video_id=v["id"], job_id=jc.job_id,
                                     meta={"start": clip["start"], "end": clip["end"], "language": language})
+            reel_caption, reel_tags = brand_svc.with_texts(brand_data, clip["caption"], clip["hashtags"])
             a = asset_svc.register(
                 app, s, jc.project_id, "main_reel" if cat == "main" else "short_reel", out, slot=slot,
                 title=clip["hook"][:200] or f"{plan['title']} - {slot}", description=clip["reason"],
-                caption=clip["caption"], hashtags=clip["hashtags"], video_id=v["id"], job_id=jc.job_id,
+                caption=reel_caption, hashtags=reel_tags, video_id=v["id"], job_id=jc.job_id,
                 preview_path=thumb, meta={"start": clip["start"], "end": clip["end"],
                                           "duration": round(clip["end"] - clip["start"], 2),
                                           "width": args["width"], "height": args["height"],
                                           "visual_theme": theme, "closing": clip.get("closing", ""),
-                                          "language": language, "has_hook_card": bool(op),
+                                          "language": language, "cutaways": len(cuts), "has_hook_card": bool(op),
                                           "has_closing_card": bool(cl)})
             s.add(Reel(asset_id=a.id, category=cat, start_s=clip["start"], end_s=clip["end"], hook=clip["hook"],
                        reason=clip["reason"], transcript_excerpt=_excerpt(segs, clip["start"], clip["end"]),
@@ -490,7 +520,7 @@ def h_poster(app, jc):
             asset_svc.delete_files(app, have)
             s.delete(have)
         layout, tpl = brand_svc.layout_for(s, "poster")
-    brand = brand_svc.get_brand(app)
+    brand = brand_svc.get_brand(app, jc.project_id)
     jc.progress(0.3, "Designing poster", force=True)
     p = plan["poster"]
     out = _poster_file(proj["ws"], "poster", 1)
@@ -500,7 +530,8 @@ def h_poster(app, jc):
                    _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", "")), layout, size, theme=theme)
     with app.db.session() as s:
         a = asset_svc.register(app, s, jc.project_id, "poster", out, slot="poster", title=p["headline"][:200],
-                               description=p["subheadline"], caption=p["quote"], hashtags=plan["hashtags"][:8],
+                               description=p["subheadline"], caption=p["quote"],
+                               hashtags=brand_svc.with_texts(brand, "", plan["hashtags"][:8])[1],
                                job_id=jc.job_id, preview_path=out,
                                meta={"layout": layout, "template_id": tpl, "size": list(size), "visual_theme": theme})
         s.add(Poster(asset_id=a.id, headline=p["headline"], subheadline=p["subheadline"], quote=p["quote"],
@@ -524,7 +555,7 @@ def h_social(app, jc):
     full = " ".join(x["text"] for x in _segments(app, tid))
     with app.db.session() as s:
         existing = {a.slot for a in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="social_post")}
-    brand = brand_svc.get_brand(app)
+    brand = brand_svc.get_brand(app, jc.project_id)
     made = []
     for i, post in enumerate(plan["encouragement_posts"]):
         slot = f"social_{i + 1}"
@@ -540,9 +571,10 @@ def h_social(app, jc):
         theme = _theme_for(app, jc, plan)
         render_graphic(out, post["headline"], post["body"], post["reference"], "Encouragement", "social",
                        _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", "")), layout, size, theme=theme)
+        post_caption, post_tags = brand_svc.with_texts(brand, post["caption"], plan["hashtags"][:8])
         with app.db.session() as s:
             a = asset_svc.register(app, s, jc.project_id, "social_post", out, slot=slot, title=post["headline"][:200],
-                                   caption=post["caption"], hashtags=plan["hashtags"][:8], job_id=jc.job_id,
+                                   caption=post_caption, hashtags=post_tags, job_id=jc.job_id,
                                    preview_path=out, meta={"layout": layout, "template_id": tpl, "size": list(size),
                                                            "similar_to": similar, "visual_theme": theme})
             s.add(SocialPost(asset_id=a.id, headline=post["headline"], body=post["body"],
@@ -603,7 +635,8 @@ def _regenerate_post(app, jc, asset_id):
 
 def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str = "re-rendered"):
     """Re-draw a poster/social image from its stored text fields as a new version."""
-    brand = brand_svc.get_brand(app)
+    with app.db.session() as s0:
+        brand = brand_svc.get_brand(app, s0.query(GeneratedAsset.project_id).filter_by(id=asset_id).scalar())
     with app.db.session() as s:
         a = s.get(GeneratedAsset, asset_id)
         if not a or a.kind not in ("poster", "social_post"):
@@ -666,8 +699,9 @@ def h_render(app, jc):
     clip = {"hook": hook0, "closing": meta0.get("closing", "")}
     cues, language = _localized_cues(app, jc, segs, start, end, (t or {}).get("language"), args["subtitle_style"])
     op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data, version + 1)
+    cuts = _cutaways(app, jc, proj["ws"], slot, version + 1, segs, start, end, theme)
     media.render_reel(v["path"], start, end, out, segments=segs, cues=cues, open_card=op, close_card=cl,
-                      accent=_theme_accent(theme), **args, **extras)
+                      accent=_theme_accent(theme), cutaways=cuts, **args, **extras)
     srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v{version + 1}.srt")
     thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}_v{version + 1}.jpg", at=1.0)
     with app.db.session() as s:
@@ -676,7 +710,7 @@ def h_render(app, jc):
         r.start_s, r.end_s = start, end
         r.transcript_excerpt = _excerpt(segs, start, end)
         meta = dict(a.meta)
-        meta.update({"start": start, "end": end, "duration": round(end - start, 2)})
+        meta.update({"start": start, "end": end, "duration": round(end - start, 2), "cutaways": len(cuts)})
         asset_svc.replace_file(app, s, a, out, "re-rendered", meta=meta)
         a.preview_path = str(thumb)
         if sub_id:
@@ -741,3 +775,28 @@ def _job_type(app, job_id):
     from ruha.models import ProcessingJob
     with app.db.session() as s:
         return s.get(ProcessingJob, job_id).job_type
+
+
+# ----------------------------- YT Video Making ---------------------------------
+def h_yt_narrate(app, jc):
+    from ruha.yt import service as yt
+    p = jc.params
+    with app.model_lock:
+        try:
+            app.services.llm.unload(jc.cfg)
+        except Exception:
+            pass
+        secs = yt.narrate(app.settings, p["name"], p.get("lang", "English"), "Male",
+                          progress=lambda f, d="": jc.progress(f, d or "Narrating"), cancel=jc.cancelled)
+    return {"lang": p.get("lang"), "minutes": round(secs / 60, 2)}
+
+
+def h_yt_video(app, jc):
+    from ruha.yt import service as yt
+    p = jc.params
+    sv = yt.use(app.settings)
+    jc.progress(0.02, "Preparing clips")
+    cdir, made = sv.make_placeholder_clips(p["name"], p.get("size", "1920x1080"))   # only fills missing clips
+    out, srt, mins = sv.assemble(p["name"], p.get("lang", "English"), p.get("size", "1920x1080"), 0.3,
+                                 bool(p.get("burn")), cb=lambda f, d="": jc.progress(0.1 + 0.9 * f, d or "Building"))
+    return {"video": out, "srt": srt, "minutes": round(mins, 2), "placeholder_clips_made": made}
