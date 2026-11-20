@@ -5,7 +5,7 @@ import json
 import re
 
 from ruha.ai.llm import LLMError, LLMUnavailable
-from ruha.services import emphasis, hooks, selection, themes
+from ruha.services import carousel, emphasis, hooks, quotes, selection, themes
 
 MAIN_RANGE = (55.0, 100.0)   # accepted seconds for the one long main reel (asked for 60-90)
 # the short reels' length and count are SETTINGS (reels.count, reels.min_s, reels.max_s); this is only their default range
@@ -117,6 +117,7 @@ PLAN_SCHEMA = """{
  "quotes":["exact sentences copied verbatim from the transcript"],
  "main_reels":[{""" + _CLIP_FIELDS + """}],
  "short_reels":[{""" + _CLIP_FIELDS + """}],
+ "carousel":[{"title":"max 6 words","text":"ONE main point of the talk, max 22 words"}],
  "poster":{"hook":"max 8 words","verse":"reference the speaker cited, else empty","verse_text":"the verse words exactly as spoken, else empty","theme":"..."},
  "encouragement_posts":[{"hook":"max 10 words","reference":"","caption":"..."}],
  "hashtags":["#..."]
@@ -150,6 +151,7 @@ def _rules(duration: float, rs: dict | None = None, topic: str = "") -> str:
 - Choose complete thoughts: begin where an idea starts and end where it lands.
 {SCORING_RULES}{topic_rule}
 {KEYWORD_RULE}
+- carousel: 5 to 7 items, the sermon's MAIN POINTS in the order the speaker makes them (a cover and a closing slide are added for you). Each item is ONE point, in your own words but true to the talk; do not repeat a point and do not invent one.
 - HOOK TEXT: each reel's hook is a short phrase of 3 to 8 words taken from the speaker's OWN words in that reel (copy a striking sentence or the first clause of one; you may drop filler words). It must make a viewer want to keep watching. Do NOT write a summary, do NOT start with "In this sermon" or "This talk", and do NOT use a single word. Poster and post hooks are short lines (max 8-10 words) that capture the theme.
 - "closing" is a short call-to-action or blessing shown at the end of a reel.
 - visual_theme: pick the single theme that best matches the sermon's mood (warfare=spiritual battle, spirit=Holy Spirit/fire, grace=forgiveness/gift, peace=rest/healing, hope=new beginnings, faith=trust/prayer, love=compassion, strength=endurance, growth=discipleship).
@@ -408,6 +410,8 @@ def normalize_plan(plan: dict, segments: list, duration: float, full_text: str, 
     hook = str(poster.get("hook") or poster.get("headline") or out["main_theme"] or out["title"]).strip()
     out["poster"] = {"headline": hook[:140], "subheadline": ref, "quote": vt,
                      "theme": str(poster.get("theme") or out["main_theme"]).strip()}
+    _poster_from_best_clip(out, segments, full_text)
+    out["carousel_points"] = carousel.candidates(plan.get("carousel"), out, full_text)
     out["encouragement_posts"] = normalize_posts(plan.get("encouragement_posts") or [], full_text, N_POSTS)
     for key in ("main_reels", "short_reels"):                # a reel always has a 3-8 word hook from its own words
         for r in out[key]:
@@ -417,6 +421,23 @@ def normalize_plan(plan: dict, segments: list, duration: float, full_text: str, 
                                                     " ".join(out["themes"])]))
             r["closing"] = r["closing"] or "Follow for more"
     return out
+
+
+def _poster_from_best_clip(out: dict, segments: list, full_text: str) -> None:
+    """The poster quotes the strongest sentence of the plan's best clip - word for word from the transcript - and its small label
+    is the clip's category (or its hook), not a fixed word. The verse the model found stays only if it is spoken in that clip."""
+    pc = quotes.poster_from_clip(out, segments, full_text)
+    p = out["poster"]
+    if pc.get("quote"):
+        p["quote"] = pc["quote"]
+        clip_text = hooks.clip_text(segments, pc["clip"]["start"], pc["clip"]["end"])
+        keep = p.get("subheadline") if reference_supported(p.get("subheadline", ""), clip_text) else ""
+        p["subheadline"] = pc["subheadline"] or keep or ""
+    elif p.get("quote") and not quotes.is_verbatim(p["quote"], full_text):
+        p["quote"] = ""
+    p["label"] = pc.get("label") or quotes.poster_label(None, out)
+    if pc.get("clip"):
+        p["clip"] = pc["clip"]
 
 
 def normalize_posts(posts: list, full_text: str, count: int) -> list:

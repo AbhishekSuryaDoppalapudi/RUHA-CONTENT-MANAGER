@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from ruha.services import emphasis, hooks, keywords, planner, selection, themes
+from ruha.services import carousel, emphasis, hooks, keywords, planner, selection, themes
 
 MAIN_TARGET = (60.0, 90.0)
 
@@ -133,6 +133,8 @@ def fallback_plan(segments: list, duration: float, one_word: bool = False, rs: d
         out["notes"].append(f"No clear moment about \"{topic}\" was found in the talk.")
     head = hooks.extract_hook(ranked[0]["text"]) if ranked else ""
     out["poster"] = {"headline": (head or out["title"])[:140], "subheadline": "", "quote": "", "theme": main_theme}
+    planner._poster_from_best_clip(out, segments, full)
+    out["carousel_points"] = carousel.candidates(None, out, full)
     posts = []
     for s in ranked[1:1 + planner.N_POSTS] or sents[:planner.N_POSTS]:
         posts.append({"headline": (hooks.extract_hook(s["text"]) or hooks.tidy_hook(s["text"], 8))[:160],

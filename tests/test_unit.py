@@ -159,7 +159,9 @@ def test_reels_get_hook_and_closing_and_plan_gets_a_theme():
 
 def test_unspoken_verses_are_removed_and_posts_are_hook_only():
     out = planner.normalize_plan(_plan(), make_segments(), 200, FULL)
-    assert out["poster"]["subheadline"] == "" and out["poster"]["quote"] == ""   # "Romans" never spoken
+    assert out["poster"]["subheadline"] == ""                                    # "Romans" never spoken
+    q = out["poster"]["quote"]
+    assert q and "never said this" not in q and q.lower().replace(":", "") in FULL.lower().replace(":", "")   # the model's verse text is not used: a sentence the speaker said
     assert out["encouragement_posts"][0]["reference"] == ""
     assert out["encouragement_posts"][1]["reference"] == "Segment"               # spoken name kept
     assert all(p["body"] == "" and p["headline"] for p in out["encouragement_posts"])
@@ -169,7 +171,9 @@ def test_verse_text_kept_only_when_read_aloud():
     verse = "grace is the free gift of God number 3 for every person"
     out = planner.normalize_plan(_plan(poster={"hook": "H", "verse": "Segment 3", "verse_text": verse}),
                                  make_segments(), 200, FULL)
-    assert out["poster"]["subheadline"] == "Segment 3" and out["poster"]["quote"] == verse
+    assert out["poster"]["subheadline"] == "Segment 3"                                     # the cited verse is kept (it is spoken in the clip)
+    q = out["poster"]["quote"]
+    assert q and q.lower().replace(":", "") in FULL.lower().replace(":", "")               # the quote is the best clip's strongest sentence, word for word
 
 
 def test_missing_reels_are_filled_automatically_and_extras_trimmed():

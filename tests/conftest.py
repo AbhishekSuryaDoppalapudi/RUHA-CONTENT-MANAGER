@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,8 @@ class FakeLLM:
     def __init__(self):
         self.calls = []
         self.prompts = []              # the full text of every prompt sent
+        self.copy_calls = 0            # captions written one clip at a time
+        self.copy_duplicate_first = False
         self.fail = False
         self.post_variant = 0
 
@@ -80,6 +83,18 @@ class FakeLLM:
             q = "hook as a question" in prompt          # the producer's comment, not the prompt's own rules
             return {"hook": "Is grace the free gift?" if q else "Grace is the free gift", "closing": "Keep believing",
                     "caption": "A word on faith", "hashtags": ["faith"], "reason": "typed by the producer"}
+        if prompt.startswith("You write the social media caption for ONE sermon reel"):
+            self.copy_calls += 1
+            tail = prompt.split("THIS reel's own transcript", 1)[-1]
+            seg = re.findall(r"Segment (\d+)", tail)
+            tag = seg[0] if seg else str(self.copy_calls)
+            n = self.copy_calls
+            if self.copy_duplicate_first and n == 1:                 # the first answer for the first clip repeats the planner's wording
+                return {"caption": "Free grace #1 for everyone", "hashtags": ["#grace"]}
+            themes = ["mercy rises over every chain", "light returns after the long night", "hope wakes the weary heart",
+                      "love stays when everything leaves", "peace settles on a restless crowd", "joy returns to the broken places",
+                      "courage grows quietly in secret"]
+            return {"caption": f"{themes[(n - 1) % len(themes)]} (segment {tag})", "hashtags": ["#faith", f"#part{tag}"]}
         if prompt.startswith("Write the text for ONE sermon poster"):
             return {"headline": "Weakness becomes strength", "verse": "", "verse_text": ""}
         if prompt.startswith("Translate each of these subtitle lines"):
@@ -108,6 +123,12 @@ class FakeLLM:
                  "category": "Story", "score": {"opening": 12, "idea": 14, "quotable": 9, "emotion": 13, "standalone": 13}},
                 {"start": 165, "end": 200, "hook": "Short three", "reason": "ok", "caption": "Short #3",
                  "category": "Prayer", "score": {"opening": 10, "idea": 12, "quotable": 8, "emotion": 10, "standalone": 12}}],
+            "carousel": [
+                {"title": "Grace is a gift", "text": "Grace is the free gift of God"},
+                {"title": "For every person", "text": "Every person receives this gift number"},
+                {"title": "Nothing to earn", "text": "God gives the gift without any number to earn"},
+                {"title": "Received by faith", "text": "The person who believes receives grace"},
+                {"title": "Live it out", "text": "Share the free gift with every other person"}],
             "poster": {"hook": "Grace Is Free", "verse": "Segment 3",
                        "verse_text": "grace is the free gift of God number 3 for every person", "theme": "Grace"},
             "encouragement_posts": [
@@ -238,7 +259,8 @@ def client(tmp_path, fakes):
         ctx = c.app.state.ctx
         ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft",
                              "design.engine": "pillow",       # the browser renderer has its own tests (slow)
-                             "reel.face_tracking": False})    # face tracking decodes and scans frames: it has its own tests
+                             "reel.face_tracking": False,     # face tracking decodes and scans frames: it has its own tests
+                             "thumbnail.best_frame": False})  # so does scoring frames for thumbnails
         yield c
 
 

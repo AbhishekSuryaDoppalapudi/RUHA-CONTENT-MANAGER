@@ -10,11 +10,12 @@ import time
 from pathlib import Path
 
 from ruha.config import QUALITY_CRF
-from ruha.models import (GeneratedAsset, Poster, Project, Reel, SocialPost, Subtitle, Transcript,
+from ruha.models import (GeneratedAsset, Poster, Project, Reel, SocialPost, SourceVideo, Subtitle, Transcript,
                          TranscriptSegment, Translation)
 from ruha.services import assets as asset_svc
 from ruha.services import brand as brand_svc
-from ruha.services import hooks, instructions, media, planfallback, planner, projects, reelvideo, reframe, selection, themes
+from ruha.services import (carousel, clipcopy, hooks, instructions, media, planfallback, planner, projects, quotes, reelvideo,
+                           reframe, selection, thumbnail, thumbs, themes)
 from ruha.services.design import render_card, render_graphic
 log = logging.getLogger("ruha.handlers")
 from ruha.creative import formats
@@ -30,6 +31,8 @@ def register(queue):
         "reel_generation": h_reels,
         "poster_generation": h_poster,
         "social_post_generation": h_social,
+        "carousel_generation": h_carousel,
+        "thumbnail_generation": h_thumbnails,
         "video_rendering": h_render,
         "translation": h_translate,
         "dubbing": h_translate,
@@ -587,7 +590,7 @@ def h_reels(app, jc):
     with app.db.session() as s:
         existing = {a.slot for a in s.query(GeneratedAsset).filter_by(project_id=jc.project_id)
                     if a.slot and a.slot.startswith(("main_", "short_")) and a.kind in ("main_reel", "short_reel")}
-    done = []
+    done, written = [], []                                      # captions written in this run (for the duplicate check)
     for n, (slot, cat, clip) in enumerate(slots):
         if slot in existing and not force:
             jc.log(f"{slot} already exists - skipped")
@@ -597,14 +600,18 @@ def h_reels(app, jc):
         theme = _theme_for(app, jc, plan)
         cues, language = _localized_cues(app, jc, segs, clip["start"], clip["end"], src_lang, args["subtitle_style"])
         ctext = hooks.clip_text(segs, clip["start"], clip["end"])
+        copy_info = None
         # the title, the Reel record and the opening card all use the same hook: 3-8 words from this reel's own words
         # (older stored plans with a one-word hook are upgraded here); one word only if hook.one_word is on
         clip = {**clip, "hook": hooks.ensure_hook(clip.get("hook", ""), ctext, bool(jc.cfg.get("hook.one_word", False)),
                                                   theme or "", f"{plan.get('main_theme', '')} {clip.get('reason', '')}")}
+        if jc.cfg.get("reels.unique_copy", True) and not clip.get("manual"):
+            clip, copy_info = _own_copy(app, jc, plan, clip, ctext, written)
+        written.append(clip.get("caption", ""))
         rendered = _render_formats(app, jc, proj["ws"], slot, 1, v, clip, segs, cues, plan, theme, brand_data, extras, args, ctext)
         out, op, cl, cuts = rendered["primary"], rendered["open"], rendered["close"], rendered["cutaways"]
         srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v1.srt")
-        thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}.jpg", at=min(1.0, (clip["end"] - clip["start"]) / 2))
+        thumb = _reel_thumbnail(jc, out, proj["ws"] / "thumbs" / f"{slot}.jpg", min(1.0, (clip["end"] - clip["start"]) / 2))
         with app.db.session() as s:
             if force:
                 for old in s.query(GeneratedAsset).filter(GeneratedAsset.project_id == jc.project_id,
@@ -635,7 +642,7 @@ def h_reels(app, jc):
                                           "score_source": clip.get("score_source") or ("typed" if clip.get("manual") else None),
                                           "category": clip.get("category"),
                                           "topic": plan.get("topic") or "", "topic_hits": clip.get("topic_hits", 0.0),
-                                          "typed": bool(clip.get("manual"))})
+                                          "typed": bool(clip.get("manual")), "copy": copy_info})
             s.add(Reel(asset_id=a.id, category=cat, start_s=clip["start"], end_s=clip["end"], hook=clip["hook"],
                        reason=clip["reason"], transcript_excerpt=_excerpt(segs, clip["start"], clip["end"]),
                        subtitle_asset_id=sa.id))
@@ -645,6 +652,40 @@ def h_reels(app, jc):
         done.append(slot)
     jc.progress(1.0, "Reels ready", force=True)
     return {"rendered": done, "skipped": [s_ for s_, *_ in slots if s_ not in done]}
+
+
+def _reel_thumbnail(jc, video, dest, fallback_at: float):
+    """A reel's thumbnail: its best frame (big face, eyes open, sharp); the old frame near the start when scoring is off or fails."""
+    if jc.cfg.get("thumbnail.best_frame", True):
+        try:
+            info = media.probe(video)
+            t = thumbs.best_time(video, 0.0, info["duration"], (info["width"], info["height"]))
+            if t is not None:
+                return media.make_thumbnail(video, dest, at=t)
+        except Exception as e:                                   # a thumbnail never fails a reel
+            jc.log(f"Could not pick the best frame ({type(e).__name__}: {e}); using the frame near the start", "WARNING")
+    return media.make_thumbnail(video, dest, at=fallback_at)
+
+
+def _own_copy(app, jc, plan, clip, clip_text, written):
+    """The clip's own caption: written from THIS clip's transcript and the captions already written, and rejected when it is a
+    near-duplicate of an earlier one (the memory's embedding check). Returns (clip with its caption, info for the asset)."""
+    from ruha.ai.llm import LLMUnavailable
+    try:
+        recent = (app.memory.prompt_context(jc.project_id, clip_text[:1500]) or {}).get("recent_content", [])[:5]
+    except Exception:
+        recent = []
+    try:
+        with app.model_lock:
+            cp, similar, tries = clipcopy.unique_copy(app.services.llm, jc.cfg, app.memory, clip_text, plan, written, recent,
+                                                      clip.get("key_words"), log=jc.log, title=clip.get("hook", ""))
+    except LLMUnavailable:
+        raise                                                    # Ollama is down: temporary, the job retries
+    except Exception as e:                                       # a bad answer keeps the planner's caption
+        jc.log(f"Could not write this clip's own caption ({type(e).__name__}); keeping the planned one", "WARNING")
+        return clip, {"own": False, "similar_to": []}
+    return ({**clip, "caption": cp["caption"], "hashtags": cp["hashtags"] or clip.get("hashtags", [])},
+            {"own": True, "tries": tries, "similar_to": similar})
 
 
 # ----------------------------- posters & social -------------------------------
@@ -685,19 +726,157 @@ def h_poster(app, jc):
     out = _poster_file(proj["ws"], "poster", 1)
     size = tuple(brand["export"]["poster"])
     theme = _theme_for(app, jc, plan)
-    render_graphic(out, p["headline"], p["quote"], p["subheadline"], "Highlight", "poster",
+    # the small label is the clip's category (or its hook) from the plan, not a fixed word
+    label = p.get("label") or plan.get("poster", {}).get("label") or quotes.poster_label(quotes.best_clip(plan), plan)
+    render_graphic(out, p["headline"], p["quote"], p["subheadline"], label, "poster",
                    _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", "")), layout, size, theme=theme)
     with app.db.session() as s:
         a = asset_svc.register(app, s, jc.project_id, "poster", out, slot="poster", title=p["headline"][:200],
                                description=p["subheadline"], caption=p["quote"],
                                hashtags=brand_svc.with_texts(brand, "", plan["hashtags"][:8])[1],
                                job_id=jc.job_id, preview_path=out,
-                               meta={"layout": layout, "template_id": tpl, "size": list(size), "visual_theme": theme})
+                               meta={"layout": layout, "template_id": tpl, "size": list(size), "visual_theme": theme,
+                                     "label": label, "quote_clip": p.get("clip") or plan.get("poster", {}).get("clip")})
         s.add(Poster(asset_id=a.id, headline=p["headline"], subheadline=p["subheadline"], quote=p["quote"],
                      theme=p["theme"], template_id=tpl))
         aid = a.id
     app.memory.index_asset(aid)
     return {"asset_id": aid}
+
+
+def _thumbnail_clip(app, jc, plan, segs, proj, duration):
+    """(start, end, hook, category, key words) of the clip the sermon's thumbnails are made for: the typed main reel if the owner
+    typed one, else the plan's main reel."""
+    clip = (plan.get("main_reels") or [None])[0] or quotes.best_clip(plan)
+    start, end = (clip["start"], clip["end"]) if clip else (0.0, min(60.0, duration))
+    inst = instructions.load(proj["ws"])
+    if inst["reels"].strip():
+        try:
+            entries, _ = instructions.parse_reels(inst["reels"], duration)
+            mains = [e for e in entries if e["category"] == "main"]
+            if mains:
+                start, end = mains[0]["start"], mains[0]["end"]
+                clip = {**(clip or {}), "hook": "", "category": None}
+        except instructions.InstructionError:
+            pass
+    text = hooks.clip_text(segs, start, end)
+    hook = thumbnail.thumbnail_hook((clip or {}).get("hook") or plan.get("poster", {}).get("headline", ""), text)
+    return start, end, hook, (clip or {}).get("category") or "", (clip or {}).get("key_words") or []
+
+
+def h_thumbnails(app, jc):
+    """Designed 1280x720 thumbnails (up to three layouts) from the best frames of the main clip, its hook (3-5 words) and the brand kit.
+    Also replaces the sermon's own thumbnail (the frame at 10 %) with the best frame found across the whole video."""
+    plan, tid = ensure_plan(app, jc)
+    proj = _load_project(app, jc.project_id)
+    v = proj["video"]
+    if not v or not v["path"].exists():
+        raise RuntimeError("Source video file is missing")
+    segs = _segments(app, tid)
+    size = (int(v.get("width") or 0), int(v.get("height") or 0))
+    duration = max(v.get("duration") or 0, segs[-1]["end"] if segs else 0)
+    start, end, hook, category, keys = _thumbnail_clip(app, jc, plan, segs, proj, duration)
+    n = max(1, min(3, int(jc.cfg.get("thumbnail.variations", 3))))
+    with app.db.session() as s:
+        have = {a.slot for a in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="thumbnail")}
+    todo = [i for i in range(1, n + 1) if f"thumb_{i}" not in have or jc.params.get("force")]
+    if not todo:
+        jc.log("Thumbnails already exist - skipped")
+        return {"skipped": True}
+    picks = []
+    if jc.cfg.get("thumbnail.best_frame", True) and all(size):
+        try:
+            jc.progress(0.1, "Choosing the best frames", force=True)
+            picks = thumbs.best_frames(v["path"], start, end, size, n)
+        except Exception as e:
+            jc.log(f"Could not score the frames ({type(e).__name__}: {e}); using evenly spaced frames", "WARNING")
+    times = [p.t for p in picks] or [start + (end - start) * f for f in (0.5, 0.3, 0.7)][:n]
+    faces = [p.face for p in picks] + [None] * n
+    while len(times) < n:
+        times.append(times[len(times) % max(1, len(times))])
+    brand = brand_svc.get_brand(app, jc.project_id)
+    theme = _theme_for(app, jc, plan)
+    bd = _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", ""))
+    made = []
+    for i in todo:
+        jc.progress(0.3 + 0.6 * (i - 1) / n, f"Designing thumbnail {i}", force=True)
+        t, face = times[i - 1], faces[i - 1]
+        frame = thumbs.save_frame(v["path"], t, proj["ws"] / "thumbs" / f"thumb_src_{i}.jpg")
+        variant = thumbnail.VARIANTS[i - 1]
+        out = proj["ws"] / "thumbnails" / f"thumb_{i}_v1.jpg"
+        if out.exists():
+            out = proj["ws"] / "thumbnails" / f"thumb_{i}_v{int(time.time())}.jpg"
+        thumbnail.design(out, frame, hook, bd, variant, face, category, keys)
+        meta = {"variant": variant, "size": [1280, 720], "hook": hook, "category": category, "frame_time": round(t, 2),
+                "clip": [start, end], "words": len(hook.split()),
+                "frame": ({"face": round(picks[i - 1].face_score, 2), "eyes": picks[i - 1].eyes, "sharp": round(picks[i - 1].sharp, 2),
+                           "score": round(picks[i - 1].score, 2)} if i - 1 < len(picks) else None)}
+        with app.db.session() as s:
+            for old in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="thumbnail", slot=f"thumb_{i}").all():
+                asset_svc.delete_files(app, old)
+                s.delete(old)
+            s.flush()
+            asset_svc.register(app, s, jc.project_id, "thumbnail", out, slot=f"thumb_{i}", title=hook[:200],
+                               description=f"{variant} layout, frame at {t:.1f}s", video_id=v["id"], job_id=jc.job_id,
+                               preview_path=out, meta=meta)
+        made.append(f"thumb_{i}")
+    if jc.cfg.get("thumbnail.best_frame", True) and all(size):
+        try:                                                     # the sermon's own thumbnail: best frame across the whole video
+            jc.progress(0.92, "Choosing the sermon's thumbnail", force=True)
+            t = thumbs.best_time(v["path"], 0.0, duration, size)
+            if t is not None:
+                th = media.make_thumbnail(v["path"], proj["ws"] / "thumbs" / f"video_{v['id']}.jpg", at=t)
+                with app.db.session() as s:
+                    sv = s.get(SourceVideo, v["id"])
+                    if sv is not None:
+                        sv.thumbnail_path = str(th)
+        except Exception as e:
+            jc.log(f"Could not update the sermon thumbnail ({type(e).__name__}: {e})", "WARNING")
+    return {"created": made, "hook": hook}
+
+
+def h_carousel(app, jc):
+    """The sermon's main points as an Instagram carousel (5-7 slides: cover, points, closing) in the brand kit."""
+    plan, tid = ensure_plan(app, jc)
+    proj = _load_project(app, jc.project_id)
+    slides = carousel.assemble(plan, jc.cfg.get("carousel.slides", carousel.DEFAULT_SLIDES))
+    if not slides:
+        jc.log("The sermon gave no usable main points for a carousel", "WARNING")
+        return {"skipped": True, "slides": 0}
+    with app.db.session() as s:
+        existing = {a.slot for a in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="carousel")}
+    if existing and not jc.params.get("force"):
+        jc.log("The carousel already exists - skipped")
+        return {"skipped": True}
+    brand = brand_svc.get_brand(app, jc.project_id)
+    theme = _theme_for(app, jc, plan)
+    bd = _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", ""))
+    size = tuple(brand["export"]["social"])
+    keep = {f"carousel_{sl['index']}" for sl in slides}
+    with app.db.session() as s:                                  # slides of an earlier, longer carousel are removed
+        for old in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="carousel").all():
+            if old.slot not in keep:
+                asset_svc.delete_files(app, old)
+                s.delete(old)
+    made = []
+    for sl in slides:
+        i = sl["index"]
+        jc.progress((i - 1) / len(slides), f"Designing slide {i} of {len(slides)}", force=True)
+        with app.db.session() as s:
+            layout, tpl = brand_svc.layout_for(s, "social", i - 1)
+        out = proj["ws"] / "carousel" / f"carousel_{i}_v1.png"
+        render_graphic(out, sl["headline"], sl["body"], sl["reference"], sl["label"], "social", bd, layout, size, theme=theme)
+        with app.db.session() as s:
+            for old in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="carousel", slot=f"carousel_{i}").all():
+                asset_svc.delete_files(app, old)
+                s.delete(old)
+            s.flush()
+            asset_svc.register(app, s, jc.project_id, "carousel", out, slot=f"carousel_{i}", title=sl["headline"][:200],
+                               description=sl["body"], job_id=jc.job_id, preview_path=out,
+                               meta={"slide": i, "total": len(slides), "slide_kind": sl["kind"], "layout": layout,
+                                     "template_id": tpl, "size": list(size), "visual_theme": theme})
+        made.append(f"carousel_{i}")
+    return {"slides": len(slides), "created": made}
 
 
 def h_social(app, jc):
@@ -804,7 +983,7 @@ def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str 
         ws = Path(a.file_path).parent.parent
         if a.kind == "poster":
             r = s.query(Poster).filter_by(asset_id=a.id).first()
-            head, body, ref, label, kind = r.headline, r.quote, r.subheadline, "Highlight", "poster"
+            head, body, ref, label, kind = r.headline, r.quote, r.subheadline, meta.get("label") or "Highlight", "poster"
             folder = "posters"
         else:
             r = s.query(SocialPost).filter_by(asset_id=a.id).first()
@@ -861,7 +1040,7 @@ def h_render(app, jc):
                                plan, theme, brand_data, extras, args)
     out, cuts = rendered["primary"], rendered["cutaways"]
     srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v{version + 1}.srt")
-    thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}_v{version + 1}.jpg", at=1.0)
+    thumb = _reel_thumbnail(jc, out, proj["ws"] / "thumbs" / f"{slot}_v{version + 1}.jpg", 1.0)
     with app.db.session() as s:
         a = s.get(GeneratedAsset, asset_id)
         r = s.query(Reel).filter_by(asset_id=asset_id).first()

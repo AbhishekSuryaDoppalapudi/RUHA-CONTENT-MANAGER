@@ -53,7 +53,7 @@ export default function ProjectDetail() {
     const list = (assets ?? []).filter((a) => kinds.includes(a.kind))
     return kinds.some((k) => k === 'main_reel' || k === 'short_reel') ? [...list].sort((x, y) => reelScore(y) - reelScore(x) || x.id - y.id) : list
   }
-  const sections: [string, string[]][] = [['Main reel', ['main_reel']], ['Short reels - best first', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
+  const sections: [string, string[]][] = [['Main reel', ['main_reel']], ['Short reels - best first', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']], ['Carousel (swipe through)', ['carousel']], ['Thumbnails (1280×720)', ['thumbnail']],
     ['Translations & dubbing', ['translation_video', 'translation_subtitle', 'audio']], ['Transcripts & subtitles', ['transcript', 'subtitle', 'caption']]]
   const total = assets?.length ?? 0
 

@@ -3,7 +3,7 @@ import { Asset, fileUrl } from '../api'
 import { StatusBadge, fmtBytes, fmtDur, label } from '../ui'
 
 export const KIND_LABEL: Record<string, string> = { creative: 'Creative',
-  main_reel: 'Main reel', short_reel: 'Short reel', image_reel: 'Image reel', poster: 'Poster', social_post: 'Social post', subtitle: 'Subtitles',
+  main_reel: 'Main reel', short_reel: 'Short reel', image_reel: 'Image reel', thumbnail: 'Thumbnail', carousel: 'Carousel slide', poster: 'Poster', social_post: 'Social post', subtitle: 'Subtitles',
   transcript: 'Transcript', caption: 'Captions', translation_video: 'Translation', translation_subtitle: 'Translated subtitles',
   audio: 'Audio', video: 'Source video',
 }
@@ -11,7 +11,7 @@ export const KIND_LABEL: Record<string, string> = { creative: 'Creative',
 export function KindIcon({ kind, size = 28 }: { kind: string; size?: number }) {
   const p = { size, strokeWidth: 1.5 }
   if (kind === 'main_reel' || kind === 'short_reel' || kind === 'image_reel') return <Film {...p} />
-  if (kind === 'poster') return <ImageIcon {...p} />
+  if (kind === 'poster' || kind === 'thumbnail' || kind === 'carousel') return <ImageIcon {...p} />
   if (kind === 'social_post') return <MessageSquareQuote {...p} />
   if (kind === 'subtitle' || kind === 'translation_subtitle') return <Captions {...p} />
   if (kind === 'transcript' || kind === 'caption') return <FileText {...p} />
@@ -79,7 +79,7 @@ export default function AssetCard({ a, onOpen, selected, onSelect, onDelete, vie
   return (
     <div className={`card group overflow-hidden cursor-pointer hover:border-accent/50 hover:-translate-y-0.5 transition ${selected ? 'ring-2 ring-primary' : ''}`} onClick={onOpen}>
       <div className="relative">
-        <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel' ? 'aspect-[9/12]' : 'aspect-[4/3]'}`} />
+        <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel' ? 'aspect-[9/12]' : a.kind === 'thumbnail' ? 'aspect-video' : a.kind === 'carousel' ? 'aspect-[4/5]' : 'aspect-[4/3]'}`} />
         {select && <div className="absolute top-2 left-2 bg-bg/70 rounded p-1">{select}</div>}
         <div className="absolute top-2 right-2"><StatusBadge status={a.status} /></div>
         <ScoreBadge a={a} className="absolute bottom-2 left-2" />

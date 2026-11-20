@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["assets"])
 
 LIBRARY_TYPES = {
     "video": None, "reel": ["main_reel"], "short": ["short_reel"], "poster": ["poster"],
-    "social": ["social_post"], "image": ["image_reel"], "creative": ["creative"], "transcript": ["transcript"], "subtitle": ["subtitle", "translation_subtitle"],
+    "social": ["social_post"], "image": ["image_reel"], "creative": ["creative"], "thumbnail": ["thumbnail"], "carousel": ["carousel"], "transcript": ["transcript"], "subtitle": ["subtitle", "translation_subtitle"],
     "caption": ["caption"], "audio": ["audio"], "translation": ["translation_video"],
 }
 

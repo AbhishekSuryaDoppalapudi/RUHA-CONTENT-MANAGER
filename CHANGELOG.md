@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - thumbnails, posters, carousel, per-clip captions
+- **Best-frame thumbnails:** frames are scored by face size, eyes open (MediaPipe face landmarker, OpenCV fallback) and sharpness; reels and the
+  sermon itself use the best frame instead of a fixed one. Setting `thumbnail.best_frame`.
+- **Designed thumbnails** (new pipeline step, asset kind `thumbnail`): three 1280x720 layouts from the best frames of the main clip, its hook as 3-5
+  words and the brand kit. Settings `thumbnail.variations`.
+- **Posters:** the small label comes from the plan (the best clip's category, else its hook) instead of the fixed word, and the quote is the strongest
+  sentence of the best clip, word for word from the transcript.
+- **Carousel** (new pipeline step, asset kind `carousel`): 5-7 slides - cover, the sermon's main points, closing - in the brand kit. Points the speaker
+  never made are dropped. Setting `carousel.slides`.
+- **A caption of its own for every clip:** written from that clip's transcript and the earlier captions; a near-duplicate (the memory's embeddings
+  check) is rewritten once, then kept and flagged. Setting `reels.unique_copy`. Costs one extra AI prompt per reel.
+
 ## Unreleased - better captions
 - **Keyword highlight by meaning, not length:** names of God (God, Jesus, Lord, Spirit ...) first, then Bible book names and verse numbers
   ("John 3:16" stays in one piece), then the words the AI marked as key for that clip (only words that really occur in it), then strong

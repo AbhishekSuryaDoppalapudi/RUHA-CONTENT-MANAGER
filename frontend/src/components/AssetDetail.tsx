@@ -51,6 +51,7 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
 
   const isReel = a?.kind === 'main_reel' || a?.kind === 'short_reel' || a?.kind === 'image_reel'
   const isGraphic = a?.kind === 'poster' || a?.kind === 'social_post'
+  const isPlainImage = a?.kind === 'thumbnail' || a?.kind === 'carousel'
   const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post', 'creative'].includes(a.kind)
 
   return (
@@ -63,7 +64,7 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
               {a.has_file && (isReel || a.kind === 'translation_video') ? (
                 <video key={`${a.id}-${a.version}-${fmt ?? 'main'}`} controls preload="metadata" poster={a.has_preview && !fmt ? fileUrl.preview(a.id, a.version) : undefined}
                   src={fmt ? fileUrl.variant(a.id, fmt, a.version) : `${fileUrl.asset(a.id)}${`?v=${a.version}`}`} className={`w-full ${isReel ? 'max-h-[68vh]' : 'max-h-[50vh]'}`} />
-              ) : a.has_file && isGraphic ? (
+              ) : a.has_file && (isGraphic || isPlainImage) ? (
                 <img src={`${fileUrl.asset(a.id)}?v=${a.version}`} alt={a.title} className="w-full max-h-[68vh] object-contain" />
               ) : a.has_file && a.kind === 'audio' ? <audio controls src={fileUrl.asset(a.id)} className="w-full m-6" />
               : text !== null ? <pre className="text-xs p-4 w-full max-h-[60vh] overflow-auto whitespace-pre-wrap text-muted">{text}</pre>

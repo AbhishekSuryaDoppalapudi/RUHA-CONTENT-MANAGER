@@ -36,13 +36,13 @@ def test_stage_failure_blocks_dependents_then_retry_recovers(client, ctx, projec
     js = {j["job_type"]: j for j in jobs(client, project_id=pid)}
     assert js["transcription"]["status"] == "failed" and "simulated whisper crash" in js["transcription"]["error"]
     assert all(js[t]["status"] == "failed" and "Not run because" in js[t]["error"]
-               for t in ("reel_generation", "poster_generation", "social_post_generation"))
+               for t in ("reel_generation", "poster_generation", "social_post_generation", "carousel_generation", "thumbnail_generation"))
     assert client.get(f"/api/projects/{pid}").json()["status"] == "failed"
     log = client.get(f"/api/jobs/{js['transcription']['id']}").json()["logs"]
     assert any(l["level"] == "ERROR" for l in log)
 
     fakes.transcriber.fail = False
-    assert client.post("/api/queue/retry-failed").json()["retried"] == 4
+    assert client.post("/api/queue/retry-failed").json()["retried"] == 6        # transcription + the five steps that depend on it
     ctx.queue.drain()
     assert all(j["status"] == "completed" for j in jobs(client, project_id=pid))
     assert kinds(client, pid)["main_reel"] == 1

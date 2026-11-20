@@ -16,7 +16,8 @@ def assets(client, pid, **q):
 def test_full_pipeline_creates_organised_assets(client, ctx, processed):
     pid = processed
     jobs = client.get(f"/api/jobs?project_id={pid}").json()["items"]
-    assert {j["job_type"] for j in jobs} == {"transcription", "reel_generation", "poster_generation", "social_post_generation"}
+    assert {j["job_type"] for j in jobs} == {"transcription", "reel_generation", "poster_generation", "social_post_generation",
+                                                   "carousel_generation", "thumbnail_generation"}
     assert all(j["status"] == "completed" and j["progress"] == 100 for j in jobs), [(j["job_type"], j["error"]) for j in jobs]
     assert client.get(f"/api/projects/{pid}").json()["status"] == "review_required"
 
@@ -26,6 +27,7 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
         by.setdefault(x["kind"], []).append(x)
     assert len(by["main_reel"]) == 1 and len(by["short_reel"]) == 3
     assert len(by["poster"]) == 1 and len(by["social_post"]) == 2
+    assert len(by["thumbnail"]) == 3 and 5 <= len(by["carousel"]) <= 7                      # the new automatic steps
     assert {"transcript", "subtitle"} <= set(by)
 
     # reels: real playable portrait videos of the right length, original untouched
@@ -63,7 +65,7 @@ def test_dashboard_and_analytics_reflect_real_records(client, processed):
     m = d["metrics"]
     assert (m["total_projects"], m["reels_generated"], m["posters_created"], m["social_posts_created"]) == (1, 4, 1, 2)
     assert m["videos_processed"] == 1 and m["failed_jobs"] == 0 and m["storage_used_bytes"] > 0
-    assert d["processing"]["completed"] == 4 and d["processing"]["queued"] == 0
+    assert d["processing"]["completed"] == 6 and d["processing"]["queued"] == 0
     assert len(d["recent"]["generated"]) == 7 and d["recent"]["uploads"][0]["project"] == "Sunday Grace"
     an = client.get("/api/analytics").json()
     assert an["assets"]["total"] == 7 and an["assets"]["draft"] == 7 and an["external_metrics"]["available"] is False
@@ -177,7 +179,7 @@ def test_library_search_filter_tags_and_bulk_download(client, processed):
     assert client.get("/api/library?type=poster").json()["total"] == 1
     assert client.get("/api/library?type=video").json()["total"] == 1
     assert client.get("/api/library?type=nonsense").status_code == 400
-    assert client.get("/api/library?q=Free grace").json()["total"] == 1
+    assert client.get("/api/library?q=mercy rises&type=reel").json()["total"] == 1       # the main reel's own caption
     reel = client.get("/api/library?type=reel&sort=name&order=asc").json()["items"][0]
     client.put(f"/api/assets/{reel['id']}/tags", json={"tags": ["Best Of"]})
     assert client.get("/api/library?tag=best of").json()["total"] == 1

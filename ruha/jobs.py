@@ -19,7 +19,8 @@ from ruha.security import redact
 
 log = logging.getLogger("ruha.jobs")
 
-PIPELINE = ["transcription", "reel_generation", "poster_generation", "social_post_generation"]
+PIPELINE = ["transcription", "reel_generation", "poster_generation", "social_post_generation", "carousel_generation",
+            "thumbnail_generation"]
 
 
 class JobCancelled(Exception):

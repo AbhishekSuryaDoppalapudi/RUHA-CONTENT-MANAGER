@@ -43,7 +43,7 @@ def live(tmp_path, fakes):
         time.sleep(0.1)
     assert server.started
     app.state.ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft", "design.engine": "pillow",
-                                                    "reel.face_tracking": False})
+                                                    "reel.face_tracking": False, "thumbnail.best_frame": False})
     yield f"http://127.0.0.1:{port}", app.state.ctx
     server.should_exit = True
     th.join(timeout=10)

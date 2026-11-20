@@ -19,7 +19,7 @@ CRITERIA = {"opening": "strong opening line (a hook)", "idea": "one clear, compl
             "quotable": "scripture or a quotable line", "emotion": "an emotional moment",
             "standalone": "works without any context"}
 PART_MAX = 20
-SELECTION_V = 2                       # bump when plans must be redone (stored plans without scores are rebuilt)
+SELECTION_V = 3                       # bump when plans must be redone (stored plans without scores are rebuilt)
 
 
 # ------------------------------------------------------------------ settings

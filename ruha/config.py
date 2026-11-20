@@ -142,6 +142,10 @@ DEFAULT_CONFIG: dict = {
     "reel.formats": {"category": "export", "value": ["9:16"]},           # video formats per reel: 9:16, 4:5, 1:1, 16:9
     "reel.face_tracking": {"category": "export", "value": True},          # follow the speaker's face; blur fill without one
     "reel.face_detector": {"category": "export", "value": "auto"},        # auto | mediapipe | opencv
+    "reels.unique_copy": {"category": "export", "value": True},          # each reel's caption is written from its own transcript, checked against earlier ones
+    "thumbnail.best_frame": {"category": "export", "value": True},       # pick thumbnails by face size, open eyes and sharpness
+    "thumbnail.variations": {"category": "export", "value": 3},          # designed 1280x720 thumbnails per sermon (1-3)
+    "carousel.slides": {"category": "export", "value": 6},               # slides in the automatic carousel (5-7)
     "reels.count": {"category": "export", "value": 6},                    # short reels per sermon (plus 1 long main reel)
     "reels.min_s": {"category": "export", "value": 30},                   # shortest short reel, seconds
     "reels.max_s": {"category": "export", "value": 60},                   # longest short reel, seconds
@@ -159,9 +163,9 @@ PROJECT_STATUSES = ["draft", "uploaded", "processing", "review_required", "appro
                     "published", "failed", "archived"]
 ASSET_STATUSES = ["draft", "approved", "rejected", "revision_requested"]
 ASSET_KINDS = ["main_reel", "short_reel", "poster", "social_post", "subtitle", "transcript",
-               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel", "creative"]
+               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel", "creative", "thumbnail", "carousel"]
 JOB_TYPES = ["transcription", "translation", "dubbing", "reel_generation", "poster_generation",
-             "social_post_generation", "video_rendering", "video_download", "image_reel",
+             "social_post_generation", "carousel_generation", "thumbnail_generation", "video_rendering", "video_download", "image_reel",
              "creative_brief", "creative_generation", "creative_benchmark", "yt_narrate", "yt_video"]
 JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled"]
 CALENDAR_STATUSES = ["draft", "approved", "scheduled", "published"]
