@@ -216,6 +216,23 @@ def asset_file(aid: int, download: bool = False, ctx=Depends(app_ctx)):
     return file_response(ctx, path, filename=name, download=download)
 
 
+@router.get("/assets/{aid}/variants/{fmt}/file")
+def asset_variant_file(aid: int, fmt: str, download: bool = False, ctx=Depends(app_ctx)):
+    """The same reel in another format (4:5, 1:1, 16:9) chosen in Settings; "main" or the reel's own format = the main file."""
+    with ctx.db.session() as s:
+        a = get_or_404(s, GeneratedAsset, aid, "Asset")
+        meta = a.meta
+        var = (meta.get("variants") or {}).get(fmt)
+        if fmt == "main" or fmt == meta.get("format"):
+            path, tag = a.file_path, meta.get("format") or "main"
+        elif isinstance(var, dict):
+            path, tag = var.get("file"), fmt
+        else:
+            raise HTTPException(404, f"This reel has no {fmt} version")
+        name = f"{slugify(a.title or a.kind)}-{tag.replace(':', 'x')}{Path(path or '').suffix}"
+    return file_response(ctx, path, filename=name, download=download)
+
+
 @router.get("/assets/{aid}/preview")
 def asset_preview(aid: int, ctx=Depends(app_ctx)):
     with ctx.db.session() as s:

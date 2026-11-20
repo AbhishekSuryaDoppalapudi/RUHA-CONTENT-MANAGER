@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased - better captions
+- **Keyword highlight by meaning, not length:** names of God (God, Jesus, Lord, Spirit ...) first, then Bible book names and verse numbers
+  ("John 3:16" stays in one piece), then the words the AI marked as key for that clip (only words that really occur in it), then strong
+  nouns and verbs (grace, forgive, surrender ...). Filler (articles, pronouns, "just", "really", contractions, -ly adverbs ...) is never
+  highlighted, so a phrase of only filler is shown plain.
+- **Four caption templates**, chosen per project (and a default in Settings): *Stacked* (the original), *Word pop* (one big word, the
+  previous one small above), *Karaoke* (a 3-5 word line, the spoken word in the brand colour) and *Classic* (two plain bottom lines).
+- **Real word timestamps** from faster-whisper (new setting `whisper.word_timestamps`, on by default; stored per transcript segment by a
+  new migration). Captions appear when their first word is spoken. Older transcripts, and translated captions, spread the words of a line
+  over its time as before - re-transcribe a project to get word times.
+- **Platform safe areas:** captions stay inside the safe area of each video format (the 9:16 bottom 430 px stays clear of the app's buttons).
+- **Indian-language captions** are set in a Noto Sans font per script (Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu,
+  Kannada, Malayalam, Arabic), copied next to the subtitle file, with each line in its own script's font. All four templates work for them.
+
+## Unreleased - speaker-aware reels, video formats, -14 LUFS
+- **Speaker-aware reframing** (replaces the centre crop): the speaker's face is found on 5 frames a second (MediaPipe Face Detection;
+  OpenCV YuNet is added when MediaPipe misses faces and used alone when MediaPipe cannot start), the crop follows him with a dead zone and a
+  moving average so it does not jitter, and the speaker is never cut off. Stretches of a second or more with no face show the whole frame
+  centred over a blurred, zoomed copy ("blur fill"). Tested on a clip where the speaker walks across the stage and leaves it.
+- **Video formats** 9:16 (1080x1920), 4:5 (1080x1350), 1:1 (1080x1080) and 16:9 (1920x1080), from `creative/formats.py`: choose several in
+  Settings; every reel is rendered in each (captions, hook/closing cards and cutaways are made for each size). The first is the reel's main
+  file, the others appear as a format switch on the reel and can be downloaded.
+- **Encoding:** NVENC (`h264_nvenc`) whenever it really works (checked with a test encode, not just "FFmpeg has it"), libx264 otherwise or if a
+  GPU encode fails (the old fallback left a stray argument behind and could not have worked). Loudness is normalised to **-14 LUFS** in two
+  passes (was one pass at -15).
+- Settings: `reel.formats`, `reel.face_tracking`, `reel.face_detector`. `scripts/reframe_check.py` tries it on any video and builds a
+  walking-speaker demo. Face models ship in `ruha/assets/models` (nothing is downloaded).
+
+## Unreleased - desktop models, one translator copy, dub a reel
+- **Models for an RTX 3060 12 GB:** planner default `qwen2.5:7b` with a selectable fallback (`qwen2.5:3b`, used automatically when the
+  7b model is not installed or does not fit; a failed model is skipped for 5 minutes); Whisper `large-v3-turbo` on CUDA in float16,
+  with a separate CPU model (`small`) used when there is no GPU or the GPU model cannot be loaded. Both are selectable in Settings.
+  A stored old default (`small`, `qwen2.5:3b`) is moved to the new default once; models you picked yourself are left alone.
+- **One translator copy** (`C:\Dev\indic-video-translator`, set with `RUHA_TRANSLATOR_DIR` in `.env`): RUHA's workers use
+  `dubbing_engine` (dubbing) and the new `compat.py` (YouTube narration + the old `_translate_impl`/`translate`/`speak`/`trim_silence`/`LANGS`
+  names). RUHA no longer imports the translator's Gradio `app.py`.
+- **Dub or translate one finished reel** (`asset_id` on a translation/dubbing job; a "What to translate" list in the dialog).
+- `scripts/e2e_full_sermon.py`: real-model end-to-end run with pre-flight check, per-step timings, hook check and a JSON report.
+
 ## Unreleased - Creative Studio (Creative Engine 2.0)
 - **New Creative Studio page** (sidebar): content source, editable creative brief written from the transcript, eight design engines,
   eight formats (reel cover, feed, square, YouTube thumbnail, carousel, poster, hook image), three-concept comparison, full-size preview with

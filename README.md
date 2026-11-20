@@ -12,7 +12,7 @@ nothing is uploaded anywhere.
 | Layer | Technology |
 |---|---|
 | Backend | Python, FastAPI, SQLAlchemy, SQLite (WAL, foreign keys, SQL migrations), Pydantic |
-| AI (all local) | faster-whisper · Ollama (default `qwen2.5:3b`) · ChromaDB + local embeddings |
+| AI (all local) | faster-whisper · Ollama (default `qwen2.5:7b`, fallback `qwen2.5:3b`) · ChromaDB + local embeddings |
 | Media | FFmpeg / FFprobe, Pillow |
 | Frontend | React, TypeScript, Vite, Tailwind CSS, Lucide |
 | Translation / dubbing | existing El Ruach Video Translator (IndicTrans2 + Parler-TTS), called through a bridge |
@@ -23,7 +23,7 @@ nothing is uploaded anywhere.
 2. Install **Ollama** from <https://ollama.com/download> (needed for content planning; transcription works without it).
 3. Double-click **`install.bat`**. It creates `.venv`, installs packages, downloads a portable Node.js *only if you have none*
    (to build the web UI), builds the UI and reports anything still missing.
-4. Double-click **`pull_models.bat`** once (downloads `qwen2.5:3b` and the `nomic-embed-text` embedding model).
+4. Double-click **`pull_models.bat`** once (downloads `qwen2.5:7b`, the `qwen2.5:3b` fallback and the `nomic-embed-text` embedding model).
 5. Double-click **`start.bat`** - the browser opens on <http://127.0.0.1:8765>.
 
 Your data lives in `ruha_data\` (or `RUHA_DATA_DIR` from `.env`). The first Whisper run downloads the chosen model
@@ -76,7 +76,7 @@ Optional **AI-generated backgrounds** (Settings > Design): needs an NVIDIA GPU a
 * Only **one heavy model is loaded at a time**: a single sequential worker, Ollama is asked to unload before Whisper loads,
   Whisper is released after every transcription, and a job refuses to start Whisper when less than the configured free RAM
   (default 3 GB) is available instead of freezing the PC.
-* Defaults: Whisper `small`, LLM `qwen2.5:3b`, reels 1080×1920 H.264 (CRF 23). Change them in **Processing Centre**.
+* Defaults: Whisper `large-v3-turbo` on an NVIDIA GPU (CUDA, float16) or `small` on the CPU, planner `qwen2.5:7b` with `qwen2.5:3b` as automatic fallback (all selectable in Settings), reels 1080×1920 H.264 (CRF 23). Change them in **Processing Centre**.
 * GPU use is automatic when CUDA is available; **CPU only** can be forced.
 
 ## Tests

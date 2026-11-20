@@ -66,3 +66,58 @@ def copy_space_phrase(zone: str) -> str:
         "upper-center": "subject low in the frame, open sky or empty space across the upper half",
         "left-half": "subject on the right side of the frame, calm empty space on the left half",
     }[zone]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Video reel formats. The three tall/square sizes are the ones above (reel_cover, feed_post, square_post), so a reel
+# and its cover/feed graphics always agree; 16:9 is the only size added here. Pick several in Settings: each reel is
+# rendered once per chosen format.
+VIDEO_FORMATS = {
+    "9:16": {"label": "Vertical 9:16 (Reels, Shorts, TikTok)", "format": "reel_cover", "size": FORMATS["reel_cover"]["size"],
+             "safe": FORMATS["reel_cover"]["safe"]},       # top/bottom bands stay clear of the app's buttons and caption
+    "4:5": {"label": "Portrait 4:5 (Instagram feed)", "format": "feed_post", "size": FORMATS["feed_post"]["size"],
+            "safe": FORMATS["feed_post"]["safe"]},
+    "1:1": {"label": "Square 1:1", "format": "square_post", "size": FORMATS["square_post"]["size"],
+            "safe": FORMATS["square_post"]["safe"]},
+    "16:9": {"label": "Landscape 16:9 (YouTube, web)", "format": None, "size": (1920, 1080),
+             "safe": (96, 54, 96, 110)},                   # 5 % title-safe margins; the bottom keeps clear of the player controls
+}
+DEFAULT_VIDEO_FORMATS = ["9:16"]
+BASE_WIDTH = 1080                      # the width the sizes above are drawn for; other render widths scale everything
+
+
+def video_format_ids(selected) -> list:
+    """Valid, unique format ids in the canonical order (9:16 first when chosen). Never empty: falls back to 9:16."""
+    chosen = {str(x) for x in (selected if isinstance(selected, (list, tuple)) else [])}
+    ids = [k for k in VIDEO_FORMATS if k in chosen]
+    return ids or list(DEFAULT_VIDEO_FORMATS)
+
+
+def video_size(fmt_id: str, render_width: int | float = BASE_WIDTH, render_height: int | float | None = None) -> tuple:
+    """Pixel size of a video format, scaled by ``render_width / 1080`` (so a small test/draft render width shrinks every
+    format alike), rounded to even numbers as H.264 needs. The 9:16 size honours an explicit ``render_height``."""
+    w, h = VIDEO_FORMATS[fmt_id]["size"]
+    k = max(0.05, float(render_width) / BASE_WIDTH)
+    sw, sh = int(round(w * k / 2)) * 2, int(round(h * k / 2)) * 2
+    if fmt_id == "9:16" and render_height:
+        sh = int(round(float(render_height) / 2)) * 2
+        sw = int(round(float(render_width) / 2)) * 2
+    return max(2, sw), max(2, sh)
+
+
+def video_safe(fid: str, size: tuple | None = None) -> tuple:
+    """(left, top, right, bottom) margins in pixels that captions must stay out of, for a video format drawn at ``size``."""
+    f = VIDEO_FORMATS[fid]
+    k = (size[0] / f["size"][0]) if size else 1.0
+    return tuple(int(round(v * k)) for v in f["safe"])
+
+
+def format_for_size(size: tuple) -> str:
+    """The video format whose shape is closest to ``size`` (width, height)."""
+    r = size[0] / max(1, size[1])
+    return min(VIDEO_FORMATS, key=lambda k: abs(math.log(r / (VIDEO_FORMATS[k]["size"][0] / VIDEO_FORMATS[k]["size"][1]))))
+
+
+def safe_for_size(size: tuple) -> tuple:
+    """Safe margins for a frame of ``size``: those of the nearest video format, scaled to the frame."""
+    return video_safe(format_for_size(size), size)

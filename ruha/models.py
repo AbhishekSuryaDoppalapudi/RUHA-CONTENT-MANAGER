@@ -107,7 +107,17 @@ class TranscriptSegment(Base):
     start: Mapped[float] = mapped_column(Float)
     end: Mapped[float] = mapped_column(Float)
     text: Mapped[str] = mapped_column(Text)
+    words_json: Mapped[str | None] = mapped_column(Text, nullable=True)     # [{"w": " grace,", "s": 1.2, "e": 1.6}, ...]
     transcript = relationship("Transcript", back_populates="segments")
+
+    @property
+    def words(self):
+        if not self.words_json:
+            return None
+        try:
+            return json.loads(self.words_json)
+        except ValueError:
+            return None
 
 
 class Translation(Base):

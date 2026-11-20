@@ -58,11 +58,10 @@ def test_ass_subtitles_are_creative_and_script_aware(tmp_path):
     f = subtitles.build_ass([(0, 2, "The wonderful grace of God"), (2, 4, "దేవుని కృప అద్భుతమైనది")], tmp_path / "s.ass",
                             270, 480, {}, accent="#FFB74D")
     txt = f.read_text(encoding="utf-8-sig")
-    assert "WONDERFUL" in txt and "GRACE" in txt                  # Latin text is upper-cased
-    assert "Style: Latin" in txt and "Style: Indic" in txt
-    assert ",Indic,," in txt and ",Latin,," in txt          # Telugu line uses the Indic font, English the Latin one
+    assert "wonderful" in txt and "grace" in txt                  # stacked captions keep the speaker's own case
+    assert "Poppins" in txt and "Noto Sans Telugu" in txt         # English in Poppins, the Telugu line in Noto Sans Telugu
     assert "\\fad(" in txt and "\\t(0,170" in txt              # pop-in animation
-    assert "&H004DB7FF&" in txt                               # keyword highlighted in the accent colour
+    assert "4DB7FF" in txt                                    # a keyword highlighted in the accent colour (BGR)
 
 
 def test_reel_render_with_cards_and_ass_is_longer_than_clip(tmp_path, sample_video):
@@ -78,10 +77,10 @@ def test_reel_render_with_cards_and_ass_is_longer_than_clip(tmp_path, sample_vid
 
 
 # ------------------------------- pipeline output -----------------------------
-def test_pipeline_makes_one_main_two_short_one_poster_two_posts_with_themes(client, ctx, processed):
+def test_pipeline_makes_one_main_scored_shorts_one_poster_two_posts_with_themes(client, ctx, processed):
     a = assets(client, processed)
     kinds = [x["kind"] for x in a]
-    assert kinds.count("main_reel") == 1 and kinds.count("short_reel") == 2
+    assert kinds.count("main_reel") == 1 and kinds.count("short_reel") == 3      # 6 asked for; a 200 s video fits 3
     assert kinds.count("poster") == 1 and kinds.count("social_post") == 2
     reel = [x for x in a if x["kind"] == "main_reel"][0]
     d = client.get(f"/api/assets/{reel['id']}").json()
@@ -181,7 +180,7 @@ def test_library_and_review_filter_by_project_and_status(client, ctx, processed,
     assert [i["id"] for i in appr["items"]] == [first["id"]]
     rq = client.get("/api/dashboard").json()["review_queue"]
     # subtitles / transcripts are not reviewable, so they are not counted as "needs review"
-    assert rq.get("draft", 0) == 2 * (1 + 2 + 1 + 2) - 1
+    assert rq.get("draft", 0) == 2 * (1 + 3 + 1 + 2) - 1
 
 
 # ------------------------- HTML renderer, fonts, AI backgrounds -----------------------

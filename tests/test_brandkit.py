@@ -139,7 +139,8 @@ def test_stacked_captions_use_small_words_over_one_big_keyword(tmp_path):
     assert "Poppins ExtraBold" in txt and "Poppins SemiBold" in txt
     assert "Testament" in txt and "TESTAMENT" not in txt                 # mixed case, like the reference
     assert "the New" in txt and "persecuting" in txt and "people" in txt
-    assert txt.count("Dialogue: 0,") == txt.count("Dialogue: 1,") == txt.count("Dialogue: 2,") >= 3   # halo, glow, crisp
+    # halo + crisp letters for every phrase; the glow only for a phrase that has a highlighted word ("He went about" has none)
+    assert txt.count("Dialogue: 0,") == txt.count("Dialogue: 2,") >= 3 and txt.count("Dialogue: 1,") == 2
     assert "&H004BB8F2&" in txt or "&H4BB8F2&" in txt                     # the gold keyword colour (BGR)
 
 
@@ -158,9 +159,9 @@ def test_stacked_style_applies_to_latin_only_and_classic_can_be_forced(tmp_path)
     cues = [(0, 2, "The wonderful grace of God")]
     assert "Poppins" in subtitles.build_ass(cues, tmp_path / "a.ass", 1080, 1920, {}).read_text(encoding="utf-8-sig")
     classic = subtitles.build_ass(cues, tmp_path / "b.ass", 1080, 1920, {"caption_style": "classic"}).read_text(encoding="utf-8-sig")
-    assert "WONDERFUL" in classic and "Poppins" not in classic
+    assert "The wonderful grace of God" in classic and "WONDERFUL" not in classic and "ExtraBold" not in classic    # plain, mixed case
     mixed = subtitles.build_ass(cues + [(2, 4, "దేవుని కృప")], tmp_path / "c.ass", 1080, 1920, {}).read_text(encoding="utf-8-sig")
-    assert "Style: Indic" in mixed and "Poppins" not in mixed                  # Indian scripts keep their own fonts
+    assert "Noto Sans Telugu" in mixed and "Poppins" in mixed                  # each line in the font of its own script
 
 
 def test_stacked_captions_render_into_a_real_video(tmp_path, sample_video):

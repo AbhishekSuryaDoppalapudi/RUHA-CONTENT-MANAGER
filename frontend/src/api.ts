@@ -66,6 +66,7 @@ export const fileUrl = {
   videoThumb: (id: number) => `/api/videos/${id}/thumbnail`,
   projectThumb: (id: number) => `/api/projects/${id}/thumbnail`,
   version: (id: number, v: number) => `/api/assets/${id}/versions/${v}/file`,
+  variant: (id: number, fmt: string, v?: number, download = false) => `/api/assets/${id}/variants/${encodeURIComponent(fmt)}/file?${download ? 'download=true&' : ''}v=${v ?? 0}`,
 }
 
 // ------------------------------- types ------------------------------------

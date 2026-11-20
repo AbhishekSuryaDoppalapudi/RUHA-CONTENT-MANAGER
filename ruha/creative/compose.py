@@ -20,7 +20,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 from ruha.creative import formats
-from ruha.services import htmlrender
+from ruha.services import htmlrender, keywords
 
 MARK = htmlrender.MARK
 DARK_THEMES = {"warfare", "faith", "spirit", "strength"}
@@ -148,19 +148,8 @@ def procedural_background(size, accent: str, seed: int, dark: bool) -> Image.Ima
 
 
 # ------------------------------------------------------------------ the transparent text layer
-def _key_words(text: str) -> set:
-    return htmlrender._key_words(text, 2)
-
-
 def _hl_html(text: str, on: bool) -> str:
-    if not on:
-        return html.escape(text)
-    keys = _key_words(text)
-    out = []
-    for w in text.split():
-        e = html.escape(w)
-        out.append(f'<span class="k">{e}</span>' if w.strip(".,!?;:\"'()").lower() in keys else e)
-    return " ".join(out)
+    return keywords.highlight_html(text) if on else html.escape(text)
 
 
 def layout_boxes(fmt_key: str, zone: str, show_brand: bool) -> tuple:

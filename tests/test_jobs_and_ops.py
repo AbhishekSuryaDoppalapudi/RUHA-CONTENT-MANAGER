@@ -87,7 +87,7 @@ def test_partial_reel_progress_is_kept_and_resumed(client, ctx, project_with_vid
     before = len(list(ctx.settings.projects_dir.rglob("main_1_v1.mp4")))
     ctx.queue.drain()
     k = kinds(client, pid)
-    assert k["main_reel"] == 1 and k["short_reel"] == 2 and before == 1
+    assert k["main_reel"] == 1 and k["short_reel"] == 3 and before == 1       # the fake sermon fits 3 shorts
 
 
 def test_cancel_queued_and_running_jobs(client, ctx, project_with_video, fakes):
@@ -164,7 +164,7 @@ def test_data_survives_application_restart(tmp_path, fakes, sample_video):
         assert c2.get("/api/settings").json()["values"]["whisper.model"] == "tiny"
         assert c2.get("/api/memory/search?q=free gift of grace").json()["hits"]            # vectors persisted
         assert c2.get(f"/api/projects/{pid}/transcript").json()["exists"]
-        assert c2.get("/api/dashboard").json()["metrics"]["reels_generated"] == 3
+        assert c2.get("/api/dashboard").json()["metrics"]["reels_generated"] == 4
 
 
 def test_interrupted_job_is_requeued_and_finishes_after_restart(tmp_path, fakes, sample_video):

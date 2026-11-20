@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +16,7 @@ from ruha.security import redact
 from ruha.services.subtitles import build_ass, build_cues, build_srt, cues_to_srt, stage_fonts
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+log = logging.getLogger("ruha.media")
 
 
 class MediaError(RuntimeError):
@@ -92,15 +96,30 @@ def extract_audio(video, wav) -> Path:
     return Path(wav)
 
 
+_NVENC = {"ok": None, "at": 0.0}
+_NVENC_TTL_S = 300.0
+
+
 def nvenc_available() -> bool:
-    if not ffmpeg_available():
-        return False
-    try:
-        p = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True,
-                           creationflags=CREATE_NO_WINDOW, timeout=20)
-        return "h264_nvenc" in p.stdout
-    except Exception:
-        return False
+    """True only when an NVENC H.264 encode really works here (a 0.2 s test clip), not merely when FFmpeg was built with
+    it - that is also true on a PC without an NVIDIA GPU. The answer is remembered for five minutes."""
+    import time
+    if _NVENC["ok"] is not None and time.time() - _NVENC["at"] < _NVENC_TTL_S:
+        return bool(_NVENC["ok"])
+    ok = False
+    if ffmpeg_available():
+        try:
+            p = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True,
+                               creationflags=CREATE_NO_WINDOW, timeout=20)
+            if "h264_nvenc" in p.stdout:
+                t = subprocess.run(["ffmpeg", "-hide_banner", "-v", "error", "-f", "lavfi", "-i",
+                                    "color=c=black:s=256x144:r=30:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"],
+                                   capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, timeout=30)
+                ok = t.returncode == 0
+        except Exception:
+            ok = False
+    _NVENC["ok"], _NVENC["at"] = ok, time.time()
+    return ok
 
 
 def _hex_to_ass(color: str) -> str:
@@ -124,7 +143,7 @@ def _force_style(style: dict) -> str:
 
 def _encoder_args(crf: int, preset: str, use_gpu: bool) -> list:
     if use_gpu:
-        return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(crf), "-b:v", "0", "-pix_fmt", "yuv420p"]
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-b:v", "0", "-pix_fmt", "yuv420p"]
     return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
 
 
@@ -166,15 +185,97 @@ def _card_video(png, out, seconds: float, w, h, crf, preset, cwd, fade_in: bool 
     run(cmd, cwd=cwd)
 
 
+LOUDNESS_I, LOUDNESS_TP, LOUDNESS_LRA = -14.0, -1.5, 11.0     # integrated LUFS / true peak dBTP / range: what social platforms expect
+
+
+def measure_loudness(source, start: float, duration: float, timeout: int = 600) -> dict | None:
+    """First pass of two-pass loudness normalisation: measure [start, start+duration] of ``source``.
+    None when there is no audio, the audio is silent, or FFmpeg cannot do it (the caller then normalises in one pass)."""
+    cmd = ["ffmpeg", "-hide_banner", "-nostats", "-ss", f"{max(0.0, start):.3f}", "-t", f"{max(0.5, duration):.3f}",
+           "-i", str(source), "-vn", "-af",
+           f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA={LOUDNESS_LRA}:print_format=json", "-f", "null", "-"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           creationflags=CREATE_NO_WINDOW)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", p.stderr or "", re.S)
+    if p.returncode != 0 or not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+        vals = {k: float(d[k]) for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")}
+    except (ValueError, KeyError, TypeError):
+        return None
+    return vals if all(math.isfinite(v) for v in vals.values()) else None
+
+
+def loudness_filter(source=None, start: float = 0.0, duration: float = 0.0, measured: dict | None = None) -> str:
+    """The ``-af`` loudnorm filter at -14 LUFS. With a measurement of the clip it is the accurate two-pass form
+    (linear gain, no pumping); without one, the single-pass form."""
+    base = f"loudnorm=I={LOUDNESS_I}:TP={LOUDNESS_TP}:LRA={LOUDNESS_LRA}"
+    if measured is None and source is not None:
+        measured = measure_loudness(source, start, duration)
+    if not measured:
+        return base
+    return (f"{base}:measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:measured_LRA={measured['input_lra']}"
+            f":measured_thresh={measured['input_thresh']}:offset={measured['target_offset']}:linear=true")
+
+
+def x_expr(keys: list) -> str:
+    """FFmpeg expression for the crop's left edge over time: piecewise linear through ``keys`` [(t, x)], written as
+    a sum of clipped ramps (no nesting, so a long camera path stays a short expression)."""
+    x0 = keys[0][1]
+    terms = [f"{x0:.1f}"]
+    for (t0, a), (t1, b) in zip(keys, keys[1:]):
+        if abs(b - a) >= 0.05:
+            terms.append(f"({b - a:.2f})*clip((t-{t0:.3f})/{max(t1 - t0, 0.04):.3f},0,1)")
+    return "+".join(terms)
+
+
+def _enable_expr(windows: list) -> str:
+    return "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in windows)
+
+
+def _blur_fill(src_label: str, out_label: str, width: int, height: int, tag: str) -> str:
+    """Blur fill: the frame zoomed to cover the output and blurred, with the whole frame centred on top."""
+    bw, bh = max(2, (width // 4) // 2 * 2), max(2, (height // 4) // 2 * 2)
+    return (f"[{src_label}]split=2[{tag}a][{tag}b];"
+            f"[{tag}a]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},boxblur=8:2,"
+            f"scale={width}:{height}[{tag}bg];"
+            f"[{tag}b]scale={width}:{height}:force_original_aspect_ratio=decrease[{tag}fg];"
+            f"[{tag}bg][{tag}fg]overlay=(W-w)/2:(H-h)/2[{out_label}]")
+
+
+def reframe_graph(rf, width: int, height: int, out_label: str = "b0") -> str:
+    """Filter graph from the input video ``[0:v]`` to ``[out_label]`` at width x height, 30 fps.
+
+    ``rf`` is a ``reframe.Reframe`` (or None for the old centre crop)."""
+    if rf is None or rf.mode in ("full", "center"):                # the old behaviour: fill the frame, centre crop
+        return (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
+                f"setsar=1,fps=30[{out_label}]")
+    cw, ch = rf.crop
+    if rf.mode == "blur":                                          # the whole clip: full frame over a blurred copy
+        return "[0:v]fps=30[rf0];" + _blur_fill("rf0", "rf1", width, height, "z") + f";[rf1]setsar=1[{out_label}]"
+    cropped = f"crop={cw}:{ch}:x='{x_expr(rf.keys)}':y=0,scale={width}:{height}:flags=lanczos"
+    if not rf.blur:
+        return f"[0:v]fps=30,{cropped},setsar=1[{out_label}]"
+    return (f"[0:v]fps=30,split=2[rfs][rfm];[rfs]{cropped}[trk];" + _blur_fill("rfm", "bf", width, height, "z")
+            + f";[trk][bf]overlay=enable='{_enable_expr(rf.blur)}'[rfo];[rfo]setsar=1[{out_label}]")
+
+
 def render_reel(source, start: float, end: float, out, *, segments=None, width=1080, height=1920,
                 crf=23, preset="veryfast", burn_subtitles=True, subtitle_style=None,
                 srt_path=None, watermark=None, intro=None, outro=None, use_gpu=False,
                 cues=None, accent="#FFD166", open_card=None, close_card=None,
-                card_seconds=(2.2, 2.6), cutaways=None) -> Path:
-    """Cut [start, end] from ``source`` into a vertical reel; never touches the source file.
+                card_seconds=(2.2, 2.6), cutaways=None, reframe=None, audio_filter=None) -> Path:
+    """Cut [start, end] from ``source`` into a reel of width x height; never touches the source file.
 
+    ``reframe`` (a ``reframe.Reframe``) makes the picture follow the speaker's face and blur-fill the stretches without
+    one; None = the old centre crop. ``audio_filter`` = the loudnorm filter (default: measured here, -14 LUFS).
     ``cutaways`` = [{"at": seconds into the reel, "dur": seconds, "image": path}]: the picture crossfades to an animated
-    (slow zoom) still for that window while the speaker's audio and the captions carry on."""
+    (slow zoom) still for that window while the speaker's audio and the captions carry on.
+    Encodes with NVENC when ``use_gpu``; if the GPU encode fails the reel is encoded again with libx264."""
     _require()
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -182,14 +283,12 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
     style = subtitle_style or {}
     tmp = Path(tempfile.mkdtemp(prefix="ruha_render_"))
     try:
-        vf = (f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-              f"crop={width}:{height},setsar=1,fps=30")
         sub_vf = ""
         if burn_subtitles and (cues or segments):
             use_cues = cues if cues is not None else build_cues(segments, start, end, int(style.get("max_chars_per_line", 28)))
             if use_cues and style.get("creative", True):
                 build_ass(use_cues, tmp / "subs.ass", width, height, style, accent)
-                sub_vf = "ass=subs.ass" + stage_fonts(tmp)
+                sub_vf = "ass=subs.ass" + stage_fonts(tmp, use_cues)
             elif use_cues:
                 cues_to_srt(use_cues, tmp / "subs.srt")
                 sub_vf = (f"subtitles=subs.srt:original_size={width}x{height}:"
@@ -199,53 +298,41 @@ def render_reel(source, start: float, end: float, out, *, segments=None, width=1
         main_out = tmp / "main.mp4" if (intro or outro or open_card or close_card) else out
         cmd = ["ffmpeg", "-y", "-ss", f"{max(0.0, start):.3f}", "-i", str(source)]
         has_wm = bool(watermark and Path(watermark).exists())
-        if cutaways:
-            fc = f"[0:v]{vf}[v0]"
-            last = "v0"
-            for i, c in enumerate(cutaways):
-                d = min(float(c["dur"]), duration - float(c["at"]))
-                fr, fd = max(2, int(round(d * 30))), min(0.35, d / 3)
-                cmd += ["-i", str(c["image"])]
-                z = "min(1+0.0011*on,1.16)" if i % 2 == 0 else "if(eq(on,0),1.16,max(1.16-0.0011*on,1.0))"
-                fc += (f";[{i + 1}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
-                       f"crop={width * 2}:{height * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                       f"d={fr}:s={width}x{height}:fps=30,setsar=1,format=yuva420p,"
-                       f"fade=t=in:st=0:d={fd:.2f}:alpha=1,fade=t=out:st={d - fd:.2f}:d={fd:.2f}:alpha=1,"
-                       f"setpts=PTS+{float(c['at']):.3f}/TB[c{i}]"
-                       f";[{last}][c{i}]overlay=eof_action=pass:format=auto[o{i}]")
-                last = f"o{i}"
-            if sub_vf:
-                fc += f";[{last}]{sub_vf}[sb]"
-                last = "sb"
-            if has_wm:
-                cmd += ["-i", str(watermark)]
-                fc += (f";[{len(cutaways) + 1}:v]scale={int(width * 0.18)}:-1,format=rgba,"
-                       f"colorchannelmixer=aa=0.75[wm];[{last}][wm]overlay=W-w-40:70:format=auto[v]")
-                last = "v"
-            cmd += ["-filter_complex", fc, "-map", f"[{last}]", "-map", "0:a?"]
-        else:
-            if sub_vf:
-                vf += "," + sub_vf
-            if has_wm:
-                cmd += ["-i", str(watermark)]
-                fc = (f"[0:v]{vf}[base];[1:v]scale={int(width * 0.18)}:-1,format=rgba,"
-                      f"colorchannelmixer=aa=0.75[wm];[base][wm]overlay=W-w-40:70:format=auto[v]")
-                cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "0:a?"]
-            else:
-                cmd += ["-vf", vf, "-map", "0:v:0", "-map", "0:a?"]
-        cmd += ["-t", f"{duration:.3f}", *_encoder_args(crf, preset, use_gpu),
-                "-af", "loudnorm=I=-15:TP=-1.5:LRA=11",
-                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
-                "-movflags", "+faststart", str(main_out)]
+        fc = reframe_graph(reframe, width, height, "b0")
+        last, n_in = "b0", 1
+        for i, c in enumerate(cutaways):
+            d = min(float(c["dur"]), duration - float(c["at"]))
+            fr, fd = max(2, int(round(d * 30))), min(0.35, d / 3)
+            cmd += ["-i", str(c["image"])]
+            z = "min(1+0.0011*on,1.16)" if i % 2 == 0 else "if(eq(on,0),1.16,max(1.16-0.0011*on,1.0))"
+            fc += (f";[{n_in}:v]scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+                   f"crop={width * 2}:{height * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                   f"d={fr}:s={width}x{height}:fps=30,setsar=1,format=yuva420p,"
+                   f"fade=t=in:st=0:d={fd:.2f}:alpha=1,fade=t=out:st={d - fd:.2f}:d={fd:.2f}:alpha=1,"
+                   f"setpts=PTS+{float(c['at']):.3f}/TB[c{i}]"
+                   f";[{last}][c{i}]overlay=eof_action=pass:format=auto[o{i}]")
+            last, n_in = f"o{i}", n_in + 1
+        if sub_vf:
+            fc += f";[{last}]{sub_vf}[sb]"
+            last = "sb"
+        if has_wm:
+            cmd += ["-i", str(watermark)]
+            fc += (f";[{n_in}:v]scale={int(width * 0.18)}:-1,format=rgba,"
+                   f"colorchannelmixer=aa=0.75[wm];[{last}][wm]overlay=W-w-40:70:format=auto[v]")
+            last = "v"
+        cmd += ["-filter_complex", fc, "-map", f"[{last}]", "-map", "0:a?"]
+        af = audio_filter or loudness_filter(source, start, duration)
+
+        def tail(enc: list) -> list:
+            return [*enc, "-af", af, "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                    "-t", f"{duration:.3f}", "-movflags", "+faststart", str(main_out)]
         try:
-            run(cmd, cwd=str(tmp))
-        except MediaError:
+            run(cmd + tail(_encoder_args(crf, preset, use_gpu)), cwd=str(tmp))
+        except MediaError as e:
             if not use_gpu:
                 raise
-            cmd2 = [c for c in cmd]
-            i = cmd2.index("h264_nvenc")
-            cmd2[i - 1:i + 8] = _encoder_args(crf, preset, False)
-            run(cmd2, cwd=str(tmp))
+            log.warning("NVENC encode failed (%s); encoding this reel with libx264 instead", e)
+            run(cmd + tail(_encoder_args(crf, preset, False)), cwd=str(tmp))
         if intro or outro or open_card or close_card:
             ordered = []
             if open_card and Path(open_card).exists():
@@ -311,7 +398,7 @@ def render_image_reel(images, out, *, seconds_per_image: float = 3.5, width=1080
         last = "cat"
         if cues:
             build_ass(cues, tmp / "subs.ass", width, height, style, accent)
-            fc += f";[{last}]ass=subs.ass{stage_fonts(tmp)}[sub]"
+            fc += f";[{last}]ass=subs.ass{stage_fonts(tmp, cues)}[sub]"
             last = "sub"
         has_wm = bool(watermark and Path(watermark).exists())
         if has_wm:

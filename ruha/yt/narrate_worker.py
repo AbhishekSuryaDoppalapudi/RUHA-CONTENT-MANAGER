@@ -13,6 +13,16 @@ def emit(**kw):
     print(MARK + json.dumps(kw, ensure_ascii=False), flush=True)
 
 
+def load_engine(tdir):
+    """The voice engine module: ``compat`` (old function names on top of dubbing_engine) when the translator
+    folder has the shared engine, otherwise the old ``app`` module. Needs translate(), speak(), trim_silence(), LANGS."""
+    if os.path.exists(os.path.join(tdir, "dubbing_engine.py")) and os.path.exists(os.path.join(tdir, "compat.py")):
+        import compat
+        return compat
+    import app
+    return app
+
+
 def main():
     req = json.loads(sys.stdin.read())
     tdir = req["translator_dir"]
@@ -20,7 +30,7 @@ def main():
     sys.path.insert(0, tdir)
     sys.path.insert(0, req["yt_dir"])
     try:
-        import app as translator          # the existing translator: translate(), speak(), trim_silence()
+        translator = load_engine(tdir)
         import story_video as sv
     except Exception as e:
         emit(error=f"Could not load the voice engine: {type(e).__name__}: {e}")

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 import { api, Asset, fileUrl, Job, Project } from '../api'
 import { Empty, ErrorBox, Field, Loading, PageHeader, ProgressBar, Spinner, StatusBadge, Tabs, ago, fmtBytes, fmtDate, fmtDur, label, useApi, useConfirm, useDebounced, useToast, PROJECT_STATUS_OPTIONS } from '../ui'
-import AssetCard from '../components/AssetCard'
+import AssetCard, { reelScore } from '../components/AssetCard'
 import BrandKit from '../components/BrandKit'
 import AssetDetail from '../components/AssetDetail'
 import { ImageReelModal, RunJobModal } from '../components/Dialogs'
@@ -48,8 +48,12 @@ export default function ProjectDetail() {
   }
   const act = async (fn: () => Promise<any>, ok: string) => { try { await fn(); toast.ok(ok); reload(); reloadAssets() } catch (e) { toast.err(e) } }
   const startEdit = () => setEdit({ name: p.name, description: p.description, tags: p.tags.join(', '), content_type: p.content_type })
-  const group = (kinds: string[]) => (assets ?? []).filter((a) => kinds.includes(a.kind))
-  const sections: [string, string[]][] = [['Main reels', ['main_reel']], ['Short reels', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
+  // reels are listed best first (by Message score); everything else keeps its order
+  const group = (kinds: string[]) => {
+    const list = (assets ?? []).filter((a) => kinds.includes(a.kind))
+    return kinds.some((k) => k === 'main_reel' || k === 'short_reel') ? [...list].sort((x, y) => reelScore(y) - reelScore(x) || x.id - y.id) : list
+  }
+  const sections: [string, string[]][] = [['Main reel', ['main_reel']], ['Short reels - best first', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
     ['Translations & dubbing', ['translation_video', 'translation_subtitle', 'audio']], ['Transcripts & subtitles', ['transcript', 'subtitle', 'caption']]]
   const total = assets?.length ?? 0
 

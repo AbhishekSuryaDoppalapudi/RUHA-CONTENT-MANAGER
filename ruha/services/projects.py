@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
+import stat
+import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -17,8 +22,41 @@ SUBDIRS = ["source", "audio", "transcript", "reels", "subtitles", "posters", "so
            "thumbs", "versions"]
 
 
+log = logging.getLogger("ruha.projects")
+
+
 class ProjectError(ValueError):
     pass
+
+
+def remove_tree(path: Path, attempts: int = 4, delay: float = 0.5) -> list:
+    """Delete a folder tree even when Windows/OneDrive/an indexer briefly holds a file or folder open: read-only
+    files are made writable, and a failed pass is retried after a short wait. Returns what is still left ([] = gone).
+
+    (Deleting a project used to leave its empty folders behind: the files went but ``shutil.rmtree`` failed on the
+    folders themselves, the error was swallowed and nothing retried.)"""
+    path = Path(path)
+
+    def fix(func, p, exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+    for i in range(attempts):
+        if not path.exists():
+            return []
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=lambda f, p, e: fix(f, p, e))
+            else:
+                shutil.rmtree(path, onerror=lambda f, p, e: fix(f, p, e))
+        except OSError as e:
+            log.warning("Removing %s: %s (try %d of %d)", path, e, i + 1, attempts)
+        if not path.exists():
+            return []
+        time.sleep(delay * (i + 1))
+    return sorted(str(x) for x in path.rglob("*"))[:20] or [str(path)]
 
 
 def workspace_of(project: Project) -> Path:
@@ -142,11 +180,53 @@ def finish_delete(ctx, info: dict) -> bool:
     ws = info["workspace"]
     try:
         ensure_within(ws, [ctx.settings.projects_dir])
-        if ws.exists():
-            shutil.rmtree(ws)
-    except Exception:
+        left = remove_tree(ws)
+        if left:
+            ok = False
+            log.warning("Project folder %s was not fully removed; %d item(s) left (e.g. %s). The orphan-folder cleanup "
+                        "will remove it later.", ws, len(left), left[0])
+    except Exception as e:
         ok = False
+        log.warning("Could not remove project folder %s: %s", ws, e)
     return ok
+
+
+# ------------------------------- orphan workspace folders ---------------------
+def orphan_workspaces(ctx, s) -> list:
+    """Folders in the projects directory that no project row points to (left behind by an earlier delete that could
+    not finish, or by hand). Each: name, path, files, bytes, age_seconds, empty (no files at all)."""
+    root = Path(ctx.settings.projects_dir)
+    if not root.exists():
+        return []
+    known = {os.path.normcase(os.path.realpath(p.workspace_dir)) for p in s.query(Project).all() if p.workspace_dir}
+    out = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or os.path.normcase(os.path.realpath(d)) in known:
+            continue
+        files = [f for f in d.rglob("*") if f.is_file()]
+        out.append({"name": d.name, "path": str(d), "files": len(files), "bytes": sum(f.stat().st_size for f in files),
+                    "empty": not files, "age_seconds": int(time.time() - d.stat().st_mtime)})
+    return out
+
+
+def cleanup_orphan_workspaces(ctx, s, *, dry_run: bool = True, include_files: bool = False, min_age_s: int = 600) -> dict:
+    """Remove orphan project folders. By default only EMPTY shells (no files at all) older than ``min_age_s`` are
+    removed; a folder that still holds files is kept unless ``include_files`` is set. ``dry_run`` only reports."""
+    removed, kept = [], []
+    for o in orphan_workspaces(ctx, s):
+        why = ("it still holds files (pass include_files to remove it)" if o["files"] and not include_files else
+               "it was changed in the last few minutes" if o["age_seconds"] < min_age_s else None)
+        if why:
+            kept.append({**o, "reason": why})
+            continue
+        if not dry_run:
+            ensure_within(Path(o["path"]), [ctx.settings.projects_dir])
+            left = remove_tree(Path(o["path"]))
+            if left:
+                kept.append({**o, "reason": f"could not be removed ({len(left)} item(s) left)"})
+                continue
+        removed.append(o)
+    return {"dry_run": dry_run, "removed": removed, "kept": kept}
 
 
 # ------------------------------- videos ------------------------------------

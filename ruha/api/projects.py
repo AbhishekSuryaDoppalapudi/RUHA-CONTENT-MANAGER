@@ -12,7 +12,9 @@ from ruha.config import JOB_TYPES, PROJECT_STATUSES
 from ruha.models import (AuditLog, ContentTag, GeneratedAsset, ProcessingJob, Project, SourceVideo, Transcript,
                          TranscriptSegment, Translation)
 from ruha.services import assets as asset_svc
+from ruha.services import instructions as instr_svc
 from ruha.services import projects as svc
+from ruha.services import selection
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -344,14 +346,60 @@ def process(pid: int, body: ProcessIn | None = None, ctx=Depends(app_ctx)):
     return {"job_ids": ids}
 
 
+class InstructionsIn(BaseModel):
+    reels: str = ""      # one reel per line: "12:30-13:45 main - comment"
+    posters: str = ""    # free-text instructions for the poster
+    topic: str | None = None   # "Find a moment about ..." (None = keep the saved one)
+    caption_template: str | None = None   # stacked | wordpop | karaoke | classic ("" = the Settings default; None = keep)
+
+
+def _instr_ctx(ctx, pid):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        v = svc.current_video(s, pid)
+        return Path(p.workspace_dir), (v.duration if v else None)
+
+
+@router.get("/projects/{pid}/instructions")
+def get_instructions(pid: int, ctx=Depends(app_ctx)):
+    ws, duration = _instr_ctx(ctx, pid)
+    d = instr_svc.load(ws)
+    return {"reels": d["reels"], "posters": d["posters"], "topic": d["topic"], "caption_template": d["caption_template"],
+            "video_seconds": duration}
+
+
+@router.put("/projects/{pid}/instructions")
+def put_instructions(pid: int, body: InstructionsIn, ctx=Depends(app_ctx)):
+    """Save the reels/posters boxes. Reel times are checked against the video length and any problem
+    is reported (400) before anything is saved."""
+    ws, duration = _instr_ctx(ctx, pid)
+    rs = selection.reel_settings(ctx.config.all())
+    try:
+        entries, warnings = instr_svc.parse_reels(body.reels, duration, (rs["min_s"], rs["max_s"]))
+        instr_svc.save(ws, body.reels, body.posters, topic=body.topic, caption_template=body.caption_template)
+    except instr_svc.InstructionError as e:
+        raise HTTPException(400, str(e))
+    return {"reels": body.reels.strip(), "posters": body.posters.strip(), "topic": instr_svc.load(ws)["topic"],
+            "caption_template": instr_svc.load(ws)["caption_template"], "warnings": warnings,
+            "parsed": [{"start": e["start"], "end": e["end"], "category": e["category"], "note": e["note"]} for e in entries]}
+
+
 @router.post("/projects/{pid}/jobs", status_code=202)
 def create_job(pid: int, body: JobIn, ctx=Depends(app_ctx)):
     if body.job_type not in JOB_TYPES:
         raise HTTPException(400, f"job_type must be one of {JOB_TYPES}")
+    if body.params.get("clone") and not (body.job_type == "dubbing" and body.params.get("clone_consent") is True):
+        raise HTTPException(400, "Voice cloning requires a dubbing job and confirmation that you have the "
+                                 "speaker's permission (clone_consent)")
     with ctx.db.session() as s:
         get_or_404(s, Project, pid, "Project")
         if body.job_type not in ("video_rendering", "image_reel") and not svc.current_video(s, pid):
             raise HTTPException(400, "Upload a video first")
+        if body.params.get("asset_id") is not None and body.job_type in ("translation", "dubbing"):
+            try:
+                asset_svc.reel_source(s, pid, body.params["asset_id"])
+            except ValueError as e:
+                raise HTTPException(400, str(e))
         if body.job_type == "image_reel" and not _image_files(Path(p0.workspace_dir) if (p0 := s.get(Project, pid)) else None):
             raise HTTPException(400, "Upload at least one image first")
     return {"job_id": ctx.queue.enqueue(body.job_type, pid, body.params)}

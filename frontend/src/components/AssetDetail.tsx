@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { CalendarPlus, Check, Download, History, MessageSquare, RefreshCw, RotateCcw, Save, Trash2, X } from 'lucide-react'
 import { api, AssetDetail as Detail, fileUrl } from '../api'
 import { Field, Loading, Modal, ErrorBox, StatusBadge, Spinner, fmtDate, fmtDur, useApi, useConfirm, useToast, label } from '../ui'
-import { KIND_LABEL } from './AssetCard'
+import { KIND_LABEL, PART_LABEL, ScoreBadge } from './AssetCard'
 
 type Props = { id: number; onClose: () => void; onChanged?: () => void }
 
@@ -12,6 +12,7 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
   const { data: a, error, loading, reload, setData } = useApi(() => api.get<Detail>(`/api/assets/${id}`), [id])
   const [f, setF] = useState({ title: '', caption: '', description: '', hashtags: '' })
   const [sub, setSub] = useState<Record<string, string>>({})
+  const [fmt, setFmt] = useState<string | null>(null)        // which format of the reel is playing (null = its main one)
   const [times, setTimes] = useState({ start: '', end: '' })
   const [busy, setBusy] = useState('')
   const [reason, setReason] = useState('')
@@ -60,14 +61,29 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
           <div className="space-y-3">
             <div className="rounded-2xl overflow-hidden bg-black/50 flex items-center justify-center border border-line/70">
               {a.has_file && (isReel || a.kind === 'translation_video') ? (
-                <video key={`${a.id}-${a.version}`} controls preload="metadata" poster={a.has_preview ? fileUrl.preview(a.id, a.version) : undefined}
-                  src={`${fileUrl.asset(a.id)}${`?v=${a.version}`}`} className={`w-full ${isReel ? 'max-h-[68vh]' : 'max-h-[50vh]'}`} />
+                <video key={`${a.id}-${a.version}-${fmt ?? 'main'}`} controls preload="metadata" poster={a.has_preview && !fmt ? fileUrl.preview(a.id, a.version) : undefined}
+                  src={fmt ? fileUrl.variant(a.id, fmt, a.version) : `${fileUrl.asset(a.id)}${`?v=${a.version}`}`} className={`w-full ${isReel ? 'max-h-[68vh]' : 'max-h-[50vh]'}`} />
               ) : a.has_file && isGraphic ? (
                 <img src={`${fileUrl.asset(a.id)}?v=${a.version}`} alt={a.title} className="w-full max-h-[68vh] object-contain" />
               ) : a.has_file && a.kind === 'audio' ? <audio controls src={fileUrl.asset(a.id)} className="w-full m-6" />
               : text !== null ? <pre className="text-xs p-4 w-full max-h-[60vh] overflow-auto whitespace-pre-wrap text-muted">{text}</pre>
               : <p className="p-10 text-sm text-muted">{a.has_file ? 'No preview for this file type.' : 'The file is missing on disk.'}</p>}
             </div>
+            {isReel && a.meta?.variants && Object.keys(a.meta.variants).length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-muted">Format</span>
+                {[a.meta.format ?? '9:16', ...Object.keys(a.meta.variants)].map((f: string) => {
+                  const on = (fmt ?? a.meta.format ?? '9:16') === f
+                  return <button key={f} className={`rounded-md border px-2 py-0.5 ${on ? 'border-primary text-ink bg-primary/15' : 'border-line text-muted hover:text-ink'}`}
+                    onClick={() => setFmt(f === (a.meta.format ?? '9:16') ? null : f)}>{f}</button>
+                })}
+                <a className="text-accent hover:underline ml-1" href={fileUrl.variant(a.id, fmt ?? a.meta.format ?? 'main', a.version, true)}>Download this format</a>
+              </div>
+            )}
+            {isReel && a.meta?.reframe && a.meta.reframe.mode && (
+              <p className="text-xs text-muted">{a.meta.reframe.mode === 'crop' ? `Follows the speaker (${a.meta.reframe.backend}; face in ${Math.round((a.meta.reframe.faces ?? 0) * 100)}% of frames${a.meta.reframe.blur_seconds ? `, ${a.meta.reframe.blur_seconds}s blur fill where no face` : ''})`
+                : a.meta.reframe.mode === 'blur' ? 'Whole frame over a blurred background (no face found)' : a.meta.reframe.mode === 'center' ? 'Centre crop' : 'Original shape'}</p>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <StatusBadge status={a.status} /> <span>v{a.version}</span>
               {a.reel && <span>{fmtDur(a.reel.start)} → {fmtDur(a.reel.end)} ({fmtDur(a.reel.end - a.reel.start)})</span>}
@@ -108,6 +124,16 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
                 {isGraphic && <select className="input !w-auto" value="" onChange={(e) => e.target.value && regenerate({ mode: 'rerender', layout: e.target.value })} aria-label="Change layout">
                   <option value="">Change layout…</option><option value="classic">Classic</option><option value="band">Band</option><option value="centered">Centered</option></select>}
               </div>
+              {(a.kind === 'main_reel' || a.kind === 'short_reel') && a.meta?.message_score != null && (
+                <div className="rounded-xl border border-line/70 p-3 space-y-2">
+                  <p className="text-sm font-medium flex items-center gap-2">Message score <ScoreBadge a={a} />{a.meta?.category && <span className="text-xs rounded-md border border-line px-1.5 py-0.5 text-muted">{a.meta.category}</span>}
+                    {a.meta?.score_source === 'estimated' && <span className="text-xs text-muted font-normal">estimated from the transcript</span>}</p>
+                  {a.description && <p className="text-sm text-muted">{a.description}</p>}
+                  {a.meta?.score_parts && <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted">
+                    {Object.entries(a.meta.score_parts as Record<string, number>).map(([k, v]) => <p key={k} className="flex justify-between"><span>{PART_LABEL[k] ?? k}</span><b className="text-ink">{v}/20</b></p>)}</div>}
+                  {a.meta?.topic && <p className="text-xs text-muted">Asked for a moment about “{a.meta.topic}”: {a.meta.topic_hits > 0 ? 'this clip matches' : 'this clip does not clearly match'}.</p>}
+                </div>
+              )}
               {isReel && (
                 <div className="rounded-xl border border-line/70 p-3 space-y-2">
                   <p className="text-xs text-muted">Trim and re-render (creates a new version; the previous file is kept). Source video is never modified.</p>

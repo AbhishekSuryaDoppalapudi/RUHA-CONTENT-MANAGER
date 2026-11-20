@@ -14,9 +14,11 @@ from ruha.models import (GeneratedAsset, Poster, Project, Reel, SocialPost, Subt
                          TranscriptSegment, Translation)
 from ruha.services import assets as asset_svc
 from ruha.services import brand as brand_svc
-from ruha.services import media, planner, projects, themes
+from ruha.services import hooks, instructions, media, planfallback, planner, projects, reelvideo, reframe, selection, themes
 from ruha.services.design import render_card, render_graphic
 log = logging.getLogger("ruha.handlers")
+from ruha.creative import formats
+from ruha.services import subtitles
 from ruha.services.subtitles import build_cues, build_srt, cues_to_srt, full_srt
 
 PRESETS = {"draft": "ultrafast", "balanced": "veryfast", "high": "medium"}
@@ -50,12 +52,12 @@ def _load_project(app, pid):
         v = projects.current_video(s, pid)
         return {"ws": Path(p.workspace_dir), "name": p.name,
                 "video": None if v is None else {"id": v.id, "path": Path(v.path), "duration": v.duration,
-                                                 "audio_tracks": v.audio_tracks}}
+                                                 "audio_tracks": v.audio_tracks, "width": v.width, "height": v.height}}
 
 
 def _segments(app, tid):
     with app.db.session() as s:
-        return [{"start": g.start, "end": g.end, "text": g.text} for g in
+        return [{"start": g.start, "end": g.end, "text": g.text, **({"words": g.words} if g.words else {})} for g in
                 s.query(TranscriptSegment).filter_by(transcript_id=tid).order_by(TranscriptSegment.idx)]
 
 
@@ -71,18 +73,30 @@ def ensure_plan(app, jc, force: bool = False):
     if t is None:
         raise RuntimeError("No transcript yet - run transcription first")
     stored = t["plan"] or {}
-    current = bool(stored.get("visual_theme")) and len(stored.get("main_reels", [])) == planner.N_MAIN \
-        and len(stored.get("short_reels", [])) == planner.N_SHORT        # plans from older versions are redone
+    proj = _load_project(app, jc.project_id)
+    rs = selection.reel_settings(jc.cfg)
+    topic = instructions.load(proj["ws"])["topic"]                # "Find a moment about ..." (empty = none)
+    # a stored plan is reused only when it was made by this version (scored candidates) for the same reel settings
+    # and the same topic; plans from older versions or other settings are redone
+    current = (bool(stored.get("visual_theme")) and stored.get("selection_v") == selection.SELECTION_V
+               and len(stored.get("main_reels", [])) == planner.N_MAIN and stored.get("reel_settings") == rs
+               and (stored.get("topic") or "") == topic)
     if stored and current and not force:
         return stored, t["id"]
     segs = _segments(app, t["id"])
-    proj = _load_project(app, jc.project_id)
     duration = max((proj["video"] or {}).get("duration") or 0, segs[-1]["end"] if segs else 0)
     full = " ".join(x["text"] for x in segs)
     ctxinfo = app.memory.prompt_context(jc.project_id, full[:2000])
     jc.log("Planning content with the local LLM")
-    with app.model_lock:
-        plan = planner.create_plan(app.services.llm, jc.cfg, segs, duration, ctxinfo, log=jc.log)
+    try:
+        with app.model_lock:
+            plan = planner.create_plan(app.services.llm, jc.cfg, segs, duration, ctxinfo, log=jc.log, topic=topic)
+    except planner.PlanError as e:                  # the plan failing must never fail the job: build one from the transcript
+        jc.log(f"The AI plan failed ({e}). Using a basic plan built from the transcript's sentences instead; "
+               "re-run with force to try the AI plan again.", "WARNING")
+        plan = planfallback.fallback_plan(segs, duration, bool(jc.cfg.get("hook.one_word", False)), rs, topic)
+    for note in plan.get("notes", []):
+        jc.log(note, "WARNING")
     with app.db.session() as s:
         tr = s.get(Transcript, t["id"])
         tr.plan_json = json.dumps(plan, ensure_ascii=False)
@@ -110,7 +124,7 @@ def _render_args(app, jc) -> dict:
             "crf": QUALITY_CRF.get(q, 23), "preset": PRESETS.get(q, "veryfast"),
             "burn_subtitles": bool(cfg.get("render.burn_subtitles", True)),
             "subtitle_style": cfg.get("subtitle.style", {}),
-            "use_gpu": cfg.get("gpu.mode") == "gpu" and media.nvenc_available()}
+            "use_gpu": cfg.get("gpu.mode", "auto") != "cpu" and media.nvenc_available()}
 
 
 def _excerpt(segs, a, b) -> str:
@@ -162,6 +176,25 @@ def _theme_for(app, jc, plan) -> str | None:
     return plan.get("visual_theme") or themes.resolve(None, plan.get("main_theme", "") + " " + plan.get("summary", ""))
 
 
+def _caption_template(jc, ws) -> str:
+    """The caption template for this project's reels: the one chosen for the project, else the Settings default."""
+    from ruha.services.subtitles import DEFAULT_TEMPLATE, TEMPLATES
+    t = instructions.load(ws)["caption_template"] or str(jc.cfg.get("subtitle.template") or DEFAULT_TEMPLATE)
+    return t if t in TEMPLATES else DEFAULT_TEMPLATE
+
+
+def _caption_style(jc, ws, style: dict, size: tuple, fid: str, brand: dict, *, words=None, key_words=None) -> dict:
+    """The caption style handed to the renderer: the saved look plus the template, the speaker's word times, the AI's key
+    words, the brand colour and the platform safe area of this video format."""
+    out = {**style, "caption_template": _caption_template(jc, ws), "safe": formats.video_safe(fid, size),
+           "brand_color": ((brand or {}).get("colors") or {}).get("primary")}
+    if words:
+        out["words"] = words
+    if key_words:
+        out["key_words"] = list(key_words)
+    return out
+
+
 def _theme_accent(theme) -> str:
     return (themes.THEMES.get(theme) or themes.THEMES[themes.DEFAULT])["accent"]
 
@@ -202,7 +235,7 @@ def _card_size(jc) -> tuple:
     return int(jc.cfg.get("render.width", 1080)), int(jc.cfg.get("render.height", 1920))
 
 
-def _reel_cards(app, jc, ws, slot, clip, plan, theme, brand, version=1):
+def _reel_cards(app, jc, ws, slot, clip, plan, theme, brand, version=1, clip_text=None, size=None):
     """Render the opening hook image and the closing image for a reel (None when disabled)."""
     if not theme:
         return None, None
@@ -210,17 +243,22 @@ def _reel_cards(app, jc, ws, slot, clip, plan, theme, brand, version=1):
     verse = (plan.get("poster") or {}).get("subheadline", "")
     op = cl = None
     if jc.cfg.get("reel.hook_card", True):
-        from ruha.services.planner import one_word_hook      # older stored plans may hold a sentence
-        word = one_word_hook(clip.get("hook", ""), theme, f"{plan.get('main_theme', '')} {clip.get('reason', '')}")
+        # a 3-8 word phrase from the reel's own words (old stored one-word hooks are upgraded); the single bold
+        # word only when the hook.one_word setting is on. A hook re-rendered from storage (no clip text) is kept as written.
+        if jc.cfg.get("hook.one_word", False) or clip_text is not None:
+            word = hooks.ensure_hook(clip.get("hook", ""), clip_text or "", bool(jc.cfg.get("hook.one_word", False)), theme,
+                                     f"{plan.get('main_theme', '')} {clip.get('reason', '')}")
+        else:
+            word = clip.get("hook", "")
         op = render_card(ws / "cards" / f"{slot}_open_v{version}.png", word, theme, bd, "open", verse,
-                         size=_card_size(jc))
+                         size=size or _card_size(jc))
     if jc.cfg.get("reel.closing_card", True):
         cl = render_card(ws / "cards" / f"{slot}_close_v{version}.png", "", theme, bd, "close", verse,
-                         brand_svc.closing_text(brand, clip.get("closing") or "Follow for more"), size=_card_size(jc))
+                         brand_svc.closing_text(brand, clip.get("closing") or "Follow for more"), size=size or _card_size(jc))
     return op, cl
 
 
-def _cutaways(app, jc, ws, slot, version, segs, start, end, theme) -> list:
+def _cutaways(app, jc, ws, slot, version, segs, start, end, theme, size=None) -> list:
     """Animated example/transition scenes cut into the teaching of a MAIN reel (not shorts). [] when off or too short."""
     if not theme or not slot.startswith("main_") or not jc.cfg.get("reel.cutaways", True):
         return []
@@ -232,9 +270,40 @@ def _cutaways(app, jc, ws, slot, version, segs, start, end, theme) -> list:
         bg = None                                   # the one cached AI picture per theme, never a new generation per cutaway
         if app.config.get("design.ai_background", False):
             bg = _ai_background(app, ws, theme, "")
-        img = cw.scene_image(ws / "cutaways" / f"{slot}_v{version}_{i}.png", theme, c["text"], _card_size(jc), accent, bg)
+        img = cw.scene_image(ws / "cutaways" / f"{slot}_v{version}_{i}.png", theme, c["text"], size or _card_size(jc), accent, bg)
         out.append({**c, "image": str(img)})
     return out
+
+
+def _render_formats(app, jc, ws, slot, version, v, clip, segs, cues, plan, theme, brand_data, extras, args, clip_text=None):
+    """Render one reel in every format chosen in Settings. The first format is the reel's main file; the others are saved
+    beside it as variants. The speaker's face is tracked once; each format gets its own crop of it (blur fill where there is
+    no face), its own cards and cutaways, and captions scaled to its size. Audio is measured once (-14 LUFS)."""
+    start, end = clip["start"], clip["end"]
+    fmts = reelvideo.chosen(jc.cfg)
+    sw, sh = int(v.get("width") or 0), int(v.get("height") or 0)
+    track = reelvideo.face_track(jc.cfg, v["path"], start, end, (sw, sh), jc.log, jc.cancelled) if sw and sh else None
+    loud = media.loudness_filter(v["path"], start, end - start)
+    res = {"variants": {}, "primary": None, "open": None, "close": None, "cutaways": [], "reframe": None, "format": fmts[0]["id"]}
+    for f in fmts:
+        w, h = f["size"]
+        op, cl = _reel_cards(app, jc, ws, slot + f["tag"], clip, plan, theme, brand_data, version, clip_text, size=f["size"])
+        cuts = _cutaways(app, jc, ws, slot + f["tag"], version, segs, start, end, theme, size=f["size"])
+        rf = reframe.plan(track, sw, sh, w, h, end - start) if sw and sh else None
+        path = ws / "reels" / (f"{slot}_v{version}.mp4" if f["primary"] else f"{slot}_{f['file']}_v{version}.mp4")
+        look = reelvideo.style_for(args["subtitle_style"], f["size"], fmts[0]["size"])
+        kw = {**args, "width": w, "height": h,
+              "subtitle_style": _caption_style(jc, ws, look, f["size"], f["id"], brand_data,
+                                               words=subtitles.clip_words(segs, start, end), key_words=clip.get("key_words"))}
+        media.render_reel(v["path"], start, end, path, segments=segs, cues=cues, open_card=op, close_card=cl,
+                          accent=_theme_accent(theme), cutaways=cuts, reframe=rf, audio_filter=loud, **kw, **extras)
+        info = {"width": w, "height": h, "file": str(path), "size_bytes": path.stat().st_size,
+                "reframe": rf.summary() if rf else {"mode": "center", "backend": None}}
+        if f["primary"]:
+            res.update(primary=path, open=op, close=cl, cutaways=cuts, reframe=info["reframe"])
+        else:
+            res["variants"][f["id"]] = info
+    return res
 
 
 # ----------------------------- reel from uploaded images -----------------------
@@ -289,7 +358,9 @@ def h_image_reel(app, jc):
     wm = brand["watermark"] if jc.cfg.get("render.apply_watermark", True) else None
     media.render_image_reel(files, out, seconds_per_image=seconds, width=args["width"], height=args["height"],
                             crf=args["crf"], preset=args["preset"], cues=cues, accent=_theme_accent(theme),
-                            subtitle_style=args["subtitle_style"], open_card=op, close_card=cl, watermark=wm,
+                            subtitle_style=_caption_style(jc, ws, args["subtitle_style"], (args["width"], args["height"]),
+                                                          formats.format_for_size((args["width"], args["height"])), brand),
+                            open_card=op, close_card=cl, watermark=wm,
                             music=jc.cfg.get("reel.music_path") or None)
     srt = cues_to_srt(cues, ws / "subtitles" / f"{slot}_v1.srt")
     thumb = media.make_thumbnail(out, ws / "thumbs" / f"{slot}.jpg", at=min(1.0, seconds / 2))
@@ -371,7 +442,8 @@ def h_transcription(app, jc):
                 pass
             jc.progress(0.08, "Transcribing", force=True)
             segments, info = app.services.transcriber.transcribe(
-                wav, jc.cfg, progress=lambda f: jc.progress(0.08 + 0.72 * f, "Transcribing"), log=jc.log)
+                wav, {**jc.cfg, **({"whisper.language": jc.params["transcribe_language"]} if jc.params.get("transcribe_language") else {})},
+                progress=lambda f: jc.progress(0.08 + 0.72 * f, "Transcribing"), log=jc.log)
         wav.unlink(missing_ok=True)
         if not segments:
             raise RuntimeError("No speech was detected in this video")
@@ -421,8 +493,9 @@ def _store_transcript(app, jc, ws: Path, v: dict, segments: list, info: dict) ->
                        model=info.get("model"), full_text=" ".join(x["text"] for x in segments))
         s.add(t)
         s.flush()
-        s.bulk_save_objects([TranscriptSegment(transcript_id=t.id, idx=i, start=x["start"], end=x["end"],
-                                               text=x["text"]) for i, x in enumerate(segments)])
+        s.bulk_save_objects([TranscriptSegment(transcript_id=t.id, idx=i, start=x["start"], end=x["end"], text=x["text"],
+                                               words_json=json.dumps(x["words"], ensure_ascii=False) if x.get("words") else None)
+                             for i, x in enumerate(segments)])
         asset_svc.register(app, s, jc.project_id, "transcript", tdir / "transcript.txt", slot="transcript",
                            title="Transcript", description=f"Language: {info.get('language')}", video_id=v["id"],
                            job_id=jc.job_id, meta={"language": info.get("language"), "segments": len(segments)})
@@ -436,13 +509,75 @@ def _store_transcript(app, jc, ws: Path, v: dict, segments: list, info: dict) ->
 
 
 # ----------------------------- reels ------------------------------------------
+def _with_typed_reels(app, jc, plan, segs, ws, duration):
+    """Put the reels the producer typed (exact times + comments) in front of the AI's plan.
+    The AI only writes each typed reel's hook/caption; the text is cached so re-renders keep it."""
+    inst = instructions.load(ws)
+    if not inst["reels"].strip():
+        return plan
+    try:
+        rs = selection.reel_settings(jc.cfg)
+        entries, warnings = instructions.parse_reels(inst["reels"], duration, (rs["min_s"], rs["max_s"]))
+    except instructions.InstructionError as e:
+        raise RuntimeError(f"The reels instructions are not valid: {e}")
+    for w in warnings:
+        jc.log(w, "WARNING")
+    gen, dirty = dict(inst["generated"]), []
+
+    def describe(e):
+        text = " ".join(s["text"] for s in segs if s["end"] > e["start"] and s["start"] < e["end"])
+        key = instructions.key_for("reel", planner.REEL_PROMPT_V, e["start"], e["end"], e["note"], text)
+        if key not in gen:
+            gen[key] = planner.describe_reel(app.services.llm, jc.cfg, text, e["note"], plan, log=jc.log)
+            dirty.append(key)
+        return gen[key]
+    with app.model_lock:
+        out = instructions.apply_manual_reels(plan, entries, describe, short_count=rs["count"])
+    if dirty:
+        instructions.save(ws, inst["reels"], inst["posters"], generated=gen)
+    jc.log(f"Using {len(entries)} reel(s) with the times you typed")
+    return out
+
+
+def _typed_reels_cover_all(ws, duration, rs=None) -> bool:
+    """True when the producer typed at least as many main and short reels as the plan would make."""
+    rs = rs or selection.reel_settings({})
+    inst = instructions.load(ws)
+    if not inst["reels"].strip():
+        return False
+    try:
+        entries, _ = instructions.parse_reels(inst["reels"], duration, (rs["min_s"], rs["max_s"]))
+    except instructions.InstructionError as e:         # fail now, not after minutes of planning
+        raise RuntimeError(f"The reels instructions are not valid: {e}")
+    return (sum(e["category"] == "main" for e in entries) >= planner.N_MAIN
+            and sum(e["category"] == "short" for e in entries) >= rs["count"])
+
+
+def _plan_without_ai(app, jc, t, segs, duration, ws=None):
+    """The plan for a reel job whose reels were all typed: the stored plan if there is one, else a basic plan from
+    the transcript. The AI content planner is not run, and nothing is stored (the poster/post jobs plan on their own)."""
+    stored = t["plan"] or {}
+    if stored.get("visual_theme"):
+        return stored
+    return planfallback.fallback_plan(segs, duration, bool(jc.cfg.get("hook.one_word", False)),
+                                      selection.reel_settings(jc.cfg), instructions.load(ws)["topic"] if ws else "")
+
+
 def h_reels(app, jc):
-    plan, tid = ensure_plan(app, jc)
     proj = _load_project(app, jc.project_id)
     v = proj["video"]
     if not v or not v["path"].exists():
         raise RuntimeError("Source video file is missing")
-    segs = _segments(app, tid)
+    t0 = _latest_transcript(app, jc.project_id)
+    if t0 is not None and _typed_reels_cover_all(proj["ws"], v.get("duration") or 0, selection.reel_settings(jc.cfg)):
+        tid = t0["id"]
+        segs = _segments(app, tid)
+        jc.log("Every reel was typed by you: skipping the AI content plan")
+        plan = _plan_without_ai(app, jc, t0, segs, max(v.get("duration") or 0, segs[-1]["end"] if segs else 0), proj["ws"])
+    else:
+        plan, tid = ensure_plan(app, jc)
+        segs = _segments(app, tid)
+    plan = _with_typed_reels(app, jc, plan, segs, proj["ws"], v.get("duration") or 0)
     brand_data, extras = _brand_for_render(app, jc)
     args = _render_args(app, jc)
     src_lang = (_latest_transcript(app, jc.project_id) or {}).get("language")
@@ -461,10 +596,13 @@ def h_reels(app, jc):
         out = proj["ws"] / "reels" / f"{slot}_v1.mp4"
         theme = _theme_for(app, jc, plan)
         cues, language = _localized_cues(app, jc, segs, clip["start"], clip["end"], src_lang, args["subtitle_style"])
-        op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data)
-        cuts = _cutaways(app, jc, proj["ws"], slot, 1, segs, clip["start"], clip["end"], theme)
-        media.render_reel(v["path"], clip["start"], clip["end"], out, segments=segs, cues=cues, open_card=op,
-                          close_card=cl, accent=_theme_accent(theme), cutaways=cuts, **args, **extras)
+        ctext = hooks.clip_text(segs, clip["start"], clip["end"])
+        # the title, the Reel record and the opening card all use the same hook: 3-8 words from this reel's own words
+        # (older stored plans with a one-word hook are upgraded here); one word only if hook.one_word is on
+        clip = {**clip, "hook": hooks.ensure_hook(clip.get("hook", ""), ctext, bool(jc.cfg.get("hook.one_word", False)),
+                                                  theme or "", f"{plan.get('main_theme', '')} {clip.get('reason', '')}")}
+        rendered = _render_formats(app, jc, proj["ws"], slot, 1, v, clip, segs, cues, plan, theme, brand_data, extras, args, ctext)
+        out, op, cl, cuts = rendered["primary"], rendered["open"], rendered["close"], rendered["cutaways"]
         srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v1.srt")
         thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}.jpg", at=min(1.0, (clip["end"] - clip["start"]) / 2))
         with app.db.session() as s:
@@ -487,7 +625,17 @@ def h_reels(app, jc):
                                           "width": args["width"], "height": args["height"],
                                           "visual_theme": theme, "closing": clip.get("closing", ""),
                                           "language": language, "cutaways": len(cuts), "has_hook_card": bool(op),
-                                          "has_closing_card": bool(cl)})
+                                          "has_closing_card": bool(cl),
+                                          "format": rendered["format"], "variants": rendered["variants"],
+                                          "reframe": rendered["reframe"], "key_words": clip.get("key_words") or [],
+                                          "caption_template": _caption_template(jc, proj["ws"]),
+                                          # the Message score (0-100), what it is made of, the clip's kind and whether it
+                                          # matches the "find a moment about" topic; typed reels are not scored
+                                          "message_score": clip.get("score"), "score_parts": clip.get("score_parts"),
+                                          "score_source": clip.get("score_source") or ("typed" if clip.get("manual") else None),
+                                          "category": clip.get("category"),
+                                          "topic": plan.get("topic") or "", "topic_hits": clip.get("topic_hits", 0.0),
+                                          "typed": bool(clip.get("manual"))})
             s.add(Reel(asset_id=a.id, category=cat, start_s=clip["start"], end_s=clip["end"], hook=clip["hook"],
                        reason=clip["reason"], transcript_excerpt=_excerpt(segs, clip["start"], clip["end"]),
                        subtitle_asset_id=sa.id))
@@ -509,7 +657,7 @@ def h_poster(app, jc):
     if asset_id:
         rerender_graphic(app, asset_id, layout=jc.params.get("layout"))
         return {"asset_id": asset_id, "mode": "rerender"}
-    plan, _ = ensure_plan(app, jc)
+    plan, tid = ensure_plan(app, jc)
     proj = _load_project(app, jc.project_id)
     with app.db.session() as s:
         have = s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="poster").first()
@@ -523,6 +671,17 @@ def h_poster(app, jc):
     brand = brand_svc.get_brand(app, jc.project_id)
     jc.progress(0.3, "Designing poster", force=True)
     p = plan["poster"]
+    inst = instructions.load(proj["ws"])
+    if inst["posters"].strip():                               # the producer's instructions for the poster
+        note = inst["posters"].strip()
+        key = instructions.key_for("poster", planner.POSTER_PROMPT_V, note, plan.get("main_theme", ""), p["headline"])
+        if key not in inst["generated"]:
+            with app.model_lock:
+                full = " ".join(x["text"] for x in _segments(app, tid))
+                inst["generated"][key] = planner.poster_from_note(app.services.llm, jc.cfg, plan, full, note, log=jc.log)
+            instructions.save(proj["ws"], inst["reels"], inst["posters"], generated=inst["generated"])
+        p = inst["generated"][key]
+        jc.log("Poster text follows your instructions")
     out = _poster_file(proj["ws"], "poster", 1)
     size = tuple(brand["export"]["poster"])
     theme = _theme_for(app, jc, plan)
@@ -696,12 +855,11 @@ def h_render(app, jc):
         rr = s.query(Reel).filter_by(asset_id=asset_id).first()
         hook0 = rr.hook if rr else ""
     theme = _theme_for(app, jc, plan) if plan else None
-    clip = {"hook": hook0, "closing": meta0.get("closing", "")}
+    clip = {"hook": hook0, "closing": meta0.get("closing", ""), "key_words": meta0.get("key_words") or []}
     cues, language = _localized_cues(app, jc, segs, start, end, (t or {}).get("language"), args["subtitle_style"])
-    op, cl = _reel_cards(app, jc, proj["ws"], slot, clip, plan, theme, brand_data, version + 1)
-    cuts = _cutaways(app, jc, proj["ws"], slot, version + 1, segs, start, end, theme)
-    media.render_reel(v["path"], start, end, out, segments=segs, cues=cues, open_card=op, close_card=cl,
-                      accent=_theme_accent(theme), cutaways=cuts, **args, **extras)
+    rendered = _render_formats(app, jc, proj["ws"], slot, version + 1, v, {**clip, "start": start, "end": end}, segs, cues,
+                               plan, theme, brand_data, extras, args)
+    out, cuts = rendered["primary"], rendered["cutaways"]
     srt = cues_to_srt(cues, proj["ws"] / "subtitles" / f"{slot}_v{version + 1}.srt")
     thumb = media.make_thumbnail(out, proj["ws"] / "thumbs" / f"{slot}_v{version + 1}.jpg", at=1.0)
     with app.db.session() as s:
@@ -710,8 +868,16 @@ def h_render(app, jc):
         r.start_s, r.end_s = start, end
         r.transcript_excerpt = _excerpt(segs, start, end)
         meta = dict(a.meta)
-        meta.update({"start": start, "end": end, "duration": round(end - start, 2), "cutaways": len(cuts)})
+        old_variants = dict(meta.get("variants") or {})
+        meta.update({"start": start, "end": end, "duration": round(end - start, 2), "cutaways": len(cuts),
+                     "caption_template": _caption_template(jc, proj["ws"]),
+                     "format": rendered["format"], "variants": rendered["variants"], "reframe": rendered["reframe"]})
         asset_svc.replace_file(app, s, a, out, "re-rendered", meta=meta)
+        for old in old_variants.values():                       # the previous version's other-format files are replaced
+            try:
+                Path(old["file"]).unlink(missing_ok=True)
+            except OSError:
+                pass
         a.preview_path = str(thumb)
         if sub_id:
             sa = s.get(GeneratedAsset, sub_id)
@@ -729,10 +895,19 @@ def h_translate(app, jc):
     p = jc.params
     target = p.get("target") or "Hindi"
     dub = bool(p.get("dub")) or _job_type(app, jc.job_id) == "dubbing"
+    clone = bool(p.get("clone"))
+    if clone and not (dub and p.get("clone_consent") is True):
+        raise RuntimeError("Voice cloning needs dubbing and the confirmation that you have the speaker's permission")
+    src_path, src_title = v["path"], None
+    if p.get("asset_id") is not None:                  # dub/translate one finished reel instead of the whole sermon
+        with app.db.session() as s:
+            src_path, src_title = asset_svc.reel_source(s, jc.project_id, p["asset_id"])
+    from ruha.ai.whisper import WHISPER_LANGUAGES
+    hint = WHISPER_LANGUAGES.get(((_latest_transcript(app, jc.project_id) or {}).get("language") or "").lower())
     out_dir = proj["ws"] / "translations" / f"{re.sub(r'[^A-Za-z]', '', target)}_{jc.job_id}"
     with app.db.session() as s:
         tr = Translation(project_id=jc.project_id, video_id=v["id"], target_language=target, dubbed=dub,
-                         voice=p.get("voice", "Female"), status="running", job_id=jc.job_id)
+                         voice=f'{p.get("voice", "Female")}{" (cloned)" if clone else ""}', status="running", job_id=jc.job_id)
         s.add(tr)
         s.flush()
         trid = tr.id
@@ -743,10 +918,10 @@ def h_translate(app, jc):
             except Exception:
                 pass
             res = app.services.translator.translate(
-                v["path"], out_dir, source=p.get("source", "Auto-detect"), target=target,
+                str(src_path), out_dir, source=p.get("source", "Auto-detect"), target=target,
                 voice=p.get("voice", "Female"), dub=dub, keep_background=p.get("keep_background", True),
                 burn=p.get("burn", False), resolution=p.get("resolution", "Original resolution"),
-                progress=lambda f, d="": jc.progress(f, d or "Translating"), log=jc.log, cancel=jc.cancelled)
+                clone=clone, source_hint=hint, progress=lambda f, d="": jc.progress(f, d or "Translating"), log=jc.log, cancel=jc.cancelled)
     except Exception:
         with app.db.session() as s:
             t = s.get(Translation, trid)
@@ -754,7 +929,7 @@ def h_translate(app, jc):
         raise
     with app.db.session() as s:
         t = s.get(Translation, trid)
-        label = f"{target}{' dubbed' if dub else ''}"
+        label = f"{target}{' dubbed' if dub else ''}" + (f" - {src_title}" if src_title else "")
         ids = {}
         for key, kind, slot, title in (("video", "translation_video", f"tr_{trid}_video", f"{label} video"),
                                        ("srt", "translation_subtitle", f"tr_{trid}_srt", f"{target} subtitles"),
@@ -762,13 +937,17 @@ def h_translate(app, jc):
             if res.get(key):
                 a = asset_svc.register(app, s, jc.project_id, kind, Path(res[key]), slot=slot, title=title,
                                        description=res.get("status", ""), video_id=v["id"], job_id=jc.job_id,
-                                       meta={"target": target, "dubbed": dub})
+                                       meta={"target": target, "dubbed": dub, "voice_cloned": clone,
+                                             "ai_generated_voice": dub, "notes": res.get("notes", []),
+                                             "source_asset_id": p.get("asset_id"),
+                                             "engine": res.get("engine")})
                 ids[key] = a.id
         if "srt" in ids:
             s.add(Subtitle(project_id=jc.project_id, asset_id=ids["srt"], language=target, path=res["srt"]))
         t.status = "completed"
         t.video_asset_id, t.srt_asset_id, t.audio_asset_id = ids.get("video"), ids.get("srt"), ids.get("dub_audio")
-    return {"translation_id": trid, "assets": ids, "status": res.get("status")}
+    return {"translation_id": trid, "assets": ids, "status": res.get("status"), "voice_cloned": clone,
+            "notes": res.get("notes", [])}
 
 
 def _job_type(app, job_id):

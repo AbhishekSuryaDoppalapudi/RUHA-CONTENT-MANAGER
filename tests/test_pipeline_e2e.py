@@ -24,7 +24,7 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
     by = {}
     for x in a:
         by.setdefault(x["kind"], []).append(x)
-    assert len(by["main_reel"]) == 1 and len(by["short_reel"]) == 2
+    assert len(by["main_reel"]) == 1 and len(by["short_reel"]) == 3
     assert len(by["poster"]) == 1 and len(by["social_post"]) == 2
     assert {"transcript", "subtitle"} <= set(by)
 
@@ -61,17 +61,17 @@ def test_full_pipeline_creates_organised_assets(client, ctx, processed):
 def test_dashboard_and_analytics_reflect_real_records(client, processed):
     d = client.get("/api/dashboard").json()
     m = d["metrics"]
-    assert (m["total_projects"], m["reels_generated"], m["posters_created"], m["social_posts_created"]) == (1, 3, 1, 2)
+    assert (m["total_projects"], m["reels_generated"], m["posters_created"], m["social_posts_created"]) == (1, 4, 1, 2)
     assert m["videos_processed"] == 1 and m["failed_jobs"] == 0 and m["storage_used_bytes"] > 0
     assert d["processing"]["completed"] == 4 and d["processing"]["queued"] == 0
-    assert len(d["recent"]["generated"]) == 6 and d["recent"]["uploads"][0]["project"] == "Sunday Grace"
+    assert len(d["recent"]["generated"]) == 7 and d["recent"]["uploads"][0]["project"] == "Sunday Grace"
     an = client.get("/api/analytics").json()
-    assert an["assets"]["total"] == 6 and an["assets"]["draft"] == 6 and an["external_metrics"]["available"] is False
+    assert an["assets"]["total"] == 7 and an["assets"]["draft"] == 7 and an["external_metrics"]["available"] is False
     assert an["production_time"]["reel_generation"]["count"] == 1
     assert {t["topic"] for t in an["topics"]} == {"grace", "gift"}
     csv = client.get("/api/analytics/export?format=csv")
     assert csv.status_code == 200 and "section,key,value" in csv.text
-    assert client.get("/api/analytics/export?format=json").json()["assets"]["total"] == 6
+    assert client.get("/api/analytics/export?format=json").json()["assets"]["total"] == 7
 
 
 def test_review_workflow_is_per_asset(client, processed):
@@ -173,7 +173,7 @@ def test_library_search_filter_tags_and_bulk_download(client, processed):
     lib = client.get("/api/library").json()
     assert lib["total"] >= 9 and {i["entity"] for i in lib["items"]} == {"asset", "video"}
     assert client.get("/api/library?type=reel").json()["total"] == 1
-    assert client.get("/api/library?type=short").json()["total"] == 2
+    assert client.get("/api/library?type=short").json()["total"] == 3
     assert client.get("/api/library?type=poster").json()["total"] == 1
     assert client.get("/api/library?type=video").json()["total"] == 1
     assert client.get("/api/library?type=nonsense").status_code == 400
@@ -236,7 +236,7 @@ def test_brand_and_templates(client, ctx, processed, tmp_path):
 
 def test_settings_validation_and_processing_centre(client):
     s = client.get("/api/settings").json()
-    assert s["values"]["whisper.model"] == "small" and "ai" in s["by_category"]
+    assert s["values"]["whisper.model"] == "large-v3-turbo" and "ai" in s["by_category"]
     assert client.put("/api/settings", json={"values": {"whisper.model": "huge"}}).status_code == 400
     assert client.put("/api/settings", json={"values": {"nope": 1}}).status_code == 400
     assert client.put("/api/settings", json={"values": {"llm.base_url": "http://evil.example.com"}}).status_code == 400
@@ -244,7 +244,7 @@ def test_settings_validation_and_processing_centre(client):
     st = client.get("/api/system/status").json()
     assert st["ffmpeg"]["available"] and st["ollama"]["connected"] and st["ram"]["total_gb"] > 0
     assert st["queue"]["paused"] is False and "sequential" in st["model_loading"]["policy"]
-    assert st["whisper"]["model"] == "medium" and "disk" in st and "gpu" in st
+    assert st["whisper"]["gpu_model"] == "medium" and st["whisper"]["model"] in ("medium", "small") and "disk" in st and "gpu" in st
     info = client.get("/api/system/info").json()
     assert info["privacy"]["cloud_ai"] is False and info["database"]["size_bytes"] > 0
     assert client.get("/api/system/updates").json()["version"]

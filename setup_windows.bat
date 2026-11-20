@@ -23,7 +23,8 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Pulling the default local model qwen2.5:3b...
+echo Pulling the default local model qwen2.5:7b and the small fallback qwen2.5:3b...
+ollama pull qwen2.5:7b
 ollama pull qwen2.5:3b
 echo.
 echo Setup checks completed. Run run.bat.

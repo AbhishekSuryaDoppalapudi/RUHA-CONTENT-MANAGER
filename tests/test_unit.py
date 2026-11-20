@@ -11,7 +11,7 @@ from ruha.db import Database
 from ruha.models import GeneratedAsset, Project, SourceVideo
 from ruha.security import (PathSecurityError, ensure_within, redact, safe_extract_names, safe_join,
                            sanitize_filename, slugify)
-from ruha.services import planner
+from ruha.services import planner, selection
 from ruha.services.subtitles import build_cues, build_srt, srt_time
 from conftest import make_segments
 
@@ -133,9 +133,10 @@ def _plan(**over):
 
 
 def test_normalize_snaps_and_bounds():
-    out = planner.normalize_plan(_plan(), make_segments(), 200, FULL)
+    two = selection.reel_settings({"reels.count": 2})
+    out = planner.normalize_plan(_plan(), make_segments(), 200, FULL, rs=two)
     assert len(out["main_reels"]) == 1 and len(out["short_reels"]) == 2 and len(out["encouragement_posts"]) == 2
-    assert out["main_reels"][0]["start"] == 0 and out["main_reels"][0]["end"] == 50
+    assert out["main_reels"][0]["start"] == 0 and out["main_reels"][0]["end"] == 55      # the main reel is at least 55 s
     for r in out["main_reels"]:
         assert planner.MAIN_RANGE[0] <= r["end"] - r["start"] <= planner.MAIN_RANGE[1]
     for r in out["short_reels"]:
@@ -145,7 +146,9 @@ def test_normalize_snaps_and_bounds():
 def test_reels_get_hook_and_closing_and_plan_gets_a_theme():
     out = planner.normalize_plan(_plan(visual_theme="warfare"), make_segments(), 200, FULL)
     assert out["visual_theme"] == "warfare"
-    assert out["main_reels"][0]["hook"] == "Grace" and out["main_reels"][0]["closing"] == "Receive it"   # one word
+    assert out["main_reels"][0]["hook"] == "Grace is free" and out["main_reels"][0]["closing"] == "Receive it"   # 3-8 word phrase
+    one = planner.normalize_plan(_plan(visual_theme="warfare"), make_segments(), 200, FULL, one_word=True)
+    assert one["main_reels"][0]["hook"] == "Grace"                              # the single bold word is an opt-in setting
     assert planner.one_word_hook("In this sermon, we'll explore the intense spiritual battle against Satan") == "Battle"
     assert planner.one_word_hook("", "hope") == "Hope" and planner.one_word_hook("Breakthrough") == "Breakthrough"
     assert all(r["hook"] and r["closing"] for r in out["short_reels"])        # filled with sensible defaults
@@ -228,7 +231,7 @@ def test_long_transcript_uses_chunked_analysis():
             return {"summary": "x", "themes": [], "quotes": [], "moments": []} if calls[-1] == "PART" else _plan(
                 main_reels=[{"start": 200, "end": 260}],
                 short_reels=[{"start": 900, "end": 920}, {"start": 1200, "end": 1220}])
-    plan = planner.create_plan(LLM(), {}, segs, 2000, {}, log=lambda *a, **k: None)
+    plan = planner.create_plan(LLM(), {"reels.count": 2}, segs, 2000, {}, log=lambda *a, **k: None)
     assert calls.count("PART") >= 2 and calls[-1] == "REDUCE" and len(plan["short_reels"]) == 2
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from ruha.services import themes
+from ruha.services import keywords, themes
 
 log = logging.getLogger("ruha.htmlrender")
 
@@ -47,11 +47,6 @@ _FACES = [
 _FALLBACK_STACK = ('"Noto Sans Devanagari","Noto Sans Telugu","Noto Sans Tamil","Noto Sans Bengali","Noto Sans Kannada",'
                    '"Noto Sans Malayalam","Noto Sans Gujarati","Noto Sans Gurmukhi","Noto Sans Oriya","Noto Sans Arabic",'
                    '"Segoe UI",Arial,sans-serif')
-
-_STOP = {"the", "and", "for", "that", "this", "with", "you", "your", "are", "not", "but", "his", "her", "its",
-         "from", "have", "has", "was", "were", "will", "into", "over", "they", "them", "our", "all", "can",
-         "who", "what", "when", "then", "than", "join", "stop", "keep", "never", "every", "against"}
-
 
 class BrowserUnavailable(RuntimeError):
     pass
@@ -137,19 +132,11 @@ def _font_css(brand_font: str | None = None) -> tuple[str, str]:
     return "".join(css), head
 
 
-def _key_words(text: str, n: int = 2) -> set:
-    words = [w.strip(".,!?;:\"'()").lower() for w in (text or "").split()]
-    cand = sorted({w for w in words if len(w) > 4 and w not in _STOP}, key=len, reverse=True)
-    return set(cand[:n])
+_key_words = keywords.key_words       # the one shared accent-word rule
 
 
 def _hook_html(text: str) -> str:
-    keys = _key_words(text)
-    parts = []
-    for word in (text or "").split():
-        esc = html.escape(word)
-        parts.append(f'<span class="k">{esc}</span>' if word.strip(".,!?;:\"'()").lower() in keys else esc)
-    return " ".join(parts)
+    return keywords.highlight_html(text)
 
 
 def _theme_vars(theme: str) -> dict:

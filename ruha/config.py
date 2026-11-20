@@ -91,10 +91,14 @@ def load_settings(data_dir=None, **overrides) -> Settings:
 # Runtime configuration defaults (stored in model_settings: key -> category/value)
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG: dict = {
-    "whisper.model": {"category": "ai", "value": "small"},
+    "whisper.model": {"category": "ai", "value": "large-v3-turbo"},   # used on the GPU (CUDA, float16)
+    "whisper.cpu_model": {"category": "ai", "value": "small"},         # used instead when running on the CPU
+    "whisper.language": {"category": "ai", "value": "en"},          # spoken language code, or "auto"
+    "whisper.word_timestamps": {"category": "ai", "value": True},      # per-word times for the caption styles
     "whisper.device": {"category": "ai", "value": "auto"},          # auto | cuda | cpu
     "whisper.compute_type": {"category": "ai", "value": "auto"},
-    "llm.model": {"category": "ai", "value": "qwen2.5:3b"},
+    "llm.model": {"category": "ai", "value": "qwen2.5:7b"},
+    "llm.fallback_model": {"category": "ai", "value": "qwen2.5:3b"},   # used when the main model is missing / does not fit; "" = off
     "llm.base_url": {"category": "ai", "value": "http://localhost:11434"},
     "llm.keep_alive": {"category": "ai", "value": "2m"},
     "llm.temperature": {"category": "ai", "value": 0.35},
@@ -132,6 +136,17 @@ DEFAULT_CONFIG: dict = {
     "design.ai_model": {"category": "design", "value": "stabilityai/sdxl-turbo"},
     "design.theme_backgrounds": {"category": "design", "value": True},     # theme-matched poster/post backgrounds
     "queue.paused": {"category": "queue", "value": False},
+    "jobs.auto_retries": {"category": "queue", "value": 3},               # automatic retries of TEMPORARY errors
+    "jobs.retry_backoff_s": {"category": "queue", "value": 20},          # wait before retry 1; x3 each time (20, 60, 180 s)
+    "subtitle.template": {"category": "subtitles", "value": "stacked"},       # stacked | wordpop | karaoke | classic (a project can override it)
+    "reel.formats": {"category": "export", "value": ["9:16"]},           # video formats per reel: 9:16, 4:5, 1:1, 16:9
+    "reel.face_tracking": {"category": "export", "value": True},          # follow the speaker's face; blur fill without one
+    "reel.face_detector": {"category": "export", "value": "auto"},        # auto | mediapipe | opencv
+    "reels.count": {"category": "export", "value": 6},                    # short reels per sermon (plus 1 long main reel)
+    "reels.min_s": {"category": "export", "value": 30},                   # shortest short reel, seconds
+    "reels.max_s": {"category": "export", "value": 60},                   # longest short reel, seconds
+    "hook.one_word": {"category": "ai", "value": False},                  # opt-in: one bold word instead of a 3-8 word phrase
+    "app.model_defaults_v2": {"category": "app", "value": False},         # marker: old 3b/small defaults moved to 7b/large-v3-turbo once
     "app.theme": {"category": "app", "value": "dark"},
     "app.owner_name": {"category": "app", "value": "Owner"},
     "privacy.allow_network": {"category": "privacy", "value": False},

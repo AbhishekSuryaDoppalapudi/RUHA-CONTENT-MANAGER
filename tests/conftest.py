@@ -49,6 +49,7 @@ class FakeLLM:
 
     def __init__(self):
         self.calls = []
+        self.prompts = []              # the full text of every prompt sent
         self.fail = False
         self.post_variant = 0
 
@@ -60,6 +61,7 @@ class FakeLLM:
 
     def generate_json(self, prompt, cfg):
         self.calls.append(prompt[:60])
+        self.prompts.append(prompt)
         if self.fail:
             raise RuntimeError("Ollama unreachable (simulated)")
         if "Write 1 NEW" in prompt or "Write 2 NEW" in prompt:
@@ -74,6 +76,12 @@ class FakeLLM:
                     "headlines": ["Grace is not earned", "Why would God give it free?", "Receive what you cannot repay Romans 8:28"],
                     "supporting_text": "A free gift for every person John 3:16",
                     "creative_direction": "Warm, reverent, hopeful"}
+        if prompt.startswith("You write the opening hook"):
+            q = "hook as a question" in prompt          # the producer's comment, not the prompt's own rules
+            return {"hook": "Is grace the free gift?" if q else "Grace is the free gift", "closing": "Keep believing",
+                    "caption": "A word on faith", "hashtags": ["faith"], "reason": "typed by the producer"}
+        if prompt.startswith("Write the text for ONE sermon poster"):
+            return {"headline": "Weakness becomes strength", "verse": "", "verse_text": ""}
         if prompt.startswith("Translate each of these subtitle lines"):
             import json as _j
             lines = _j.loads(prompt.strip().splitlines()[-1])
@@ -83,12 +91,23 @@ class FakeLLM:
             "visual_theme": "grace",
             "themes": ["grace", "gift"], "key_points": ["grace is free"],
             "quotes": ["grace is the free gift of God number 3 for every person", "this sentence was never spoken"],
+            # scored candidates (more than needed, some overlapping): the best non-overlapping ones are kept
             "main_reels": [
-                {"start": 1, "end": 46, "hook": "Grace is free", "closing": "Receive it today", "reason": "opening",
-                 "caption": "Free grace #1", "hashtags": ["#grace"]}],
+                {"start": 1, "end": 70, "hook": "Grace is free", "closing": "Receive it today", "reason": "strong opening",
+                 "caption": "Free grace #1", "hashtags": ["#grace"], "category": "Teaching", "key_words": ["grace", "gift"],
+                 "score": {"opening": 18, "idea": 17, "quotable": 15, "emotion": 14, "standalone": 16}},
+                {"start": 100, "end": 170, "hook": "Weaker main", "reason": "rambling", "category": "Story",
+                 "score": {"opening": 8, "idea": 9, "quotable": 5, "emotion": 6, "standalone": 7}}],
             "short_reels": [
-                {"start": 162, "end": 182, "hook": "Short one", "reason": "s1", "caption": "Short #1"},
-                {"start": 183, "end": 200, "hook": "Short two", "reason": "s2", "caption": "Short #2"}],
+                {"start": 75, "end": 110, "hook": "Short one", "reason": "complete idea", "caption": "Short #1",
+                 "key_words": ["free gift", "invented", "the", "person"],
+                 "category": "Encouragement", "score": {"opening": 17, "idea": 18, "quotable": 14, "emotion": 17, "standalone": 18}},
+                {"start": 80, "end": 115, "hook": "Overlaps the best", "reason": "similar", "caption": "Short #1b",
+                 "category": "Teaching", "score": {"opening": 15, "idea": 15, "quotable": 10, "emotion": 12, "standalone": 14}},
+                {"start": 120, "end": 155, "hook": "Short two", "reason": "good", "caption": "Short #2",
+                 "category": "Story", "score": {"opening": 12, "idea": 14, "quotable": 9, "emotion": 13, "standalone": 13}},
+                {"start": 165, "end": 200, "hook": "Short three", "reason": "ok", "caption": "Short #3",
+                 "category": "Prayer", "score": {"opening": 10, "idea": 12, "quotable": 8, "emotion": 10, "standalone": 12}}],
             "poster": {"hook": "Grace Is Free", "verse": "Segment 3",
                        "verse_text": "grace is the free gift of God number 3 for every person", "theme": "Grace"},
             "encouragement_posts": [
@@ -164,12 +183,12 @@ class FakeTranslator:
         self.fail = False
 
     def status(self):
-        return {"available": True, "directory": "fake", "python": "fake", "reason": None}
+        return {"available": True, "directory": "fake", "python": "fake", "reason": None, "engine": "shared", "cloning": True}
 
     def translate(self, video_path, out_dir, *, source="Auto-detect", target="Hindi", voice="Female", dub=False,
-                  keep_background=True, burn=False, resolution="Original resolution", progress=None, log=None,
-                  cancel=None):
-        self.calls.append({"target": target, "dub": dub})
+                  keep_background=True, burn=False, resolution="Original resolution", clone=False, source_hint=None,
+                  progress=None, log=None, cancel=None):
+        self.calls.append({"target": target, "dub": dub, "clone": clone, "source_hint": source_hint, "video": str(video_path)})
         if self.fail:
             raise RuntimeError("translator crashed (simulated)")
         out = Path(out_dir)
@@ -218,7 +237,8 @@ def client(tmp_path, fakes):
     with c:
         ctx = c.app.state.ctx
         ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft",
-                             "design.engine": "pillow"})      # the browser renderer has its own tests (slow)
+                             "design.engine": "pillow",       # the browser renderer has its own tests (slow)
+                             "reel.face_tracking": False})    # face tracking decodes and scans frames: it has its own tests
         yield c
 
 

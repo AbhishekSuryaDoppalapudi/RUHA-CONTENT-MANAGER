@@ -34,6 +34,22 @@ export function Thumb({ a, className = '' }: { a: Asset; className?: string }) {
   )
 }
 
+export const PART_LABEL: Record<string, string> = { opening: 'Opening line', idea: 'One clear idea', quotable: 'Scripture / quotable', emotion: 'Emotional moment', standalone: 'Works without context' }
+
+/** "Message score" 0-100 of a reel: green 75+, amber 55+, grey below. Typed reels have no score. */
+export function ScoreBadge({ a, className = '' }: { a: Asset; className?: string }) {
+  const score = a.meta?.message_score as number | null | undefined
+  if (a.kind !== 'main_reel' && a.kind !== 'short_reel') return null
+  if (score == null) return a.meta?.typed ? <span className={`rounded-md border border-line bg-bg/80 px-1.5 py-0.5 text-[11px] text-muted ${className}`} title="Times typed by you - not scored">Typed</span> : null
+  const tone = score >= 75 ? 'bg-ok/20 text-ok border-ok/40' : score >= 55 ? 'bg-warn/20 text-warn border-warn/40' : 'bg-muted/20 text-muted border-muted/40'
+  const parts = a.meta?.score_parts as Record<string, number> | null | undefined
+  const tip = [`Message score ${score}/100${a.meta?.score_source === 'estimated' ? ' (estimated from the transcript)' : ''}`,
+    ...(parts ? Object.entries(parts).map(([k, v]) => `${PART_LABEL[k] ?? k}: ${v}/20`) : [])].join('\n')
+  return <span className={`rounded-md border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${tone} ${className}`} title={tip}>★ {score}</span>
+}
+
+export function reelScore(a: Asset): number { return typeof a.meta?.message_score === 'number' ? a.meta.message_score : -1 }
+
 export default function AssetCard({ a, onOpen, selected, onSelect, onDelete, view = 'grid' }: {
   a: Asset; onOpen: () => void; selected?: boolean; onSelect?: (v: boolean) => void; onDelete?: () => void; view?: 'grid' | 'list'
 }) {
@@ -52,7 +68,9 @@ export default function AssetCard({ a, onOpen, selected, onSelect, onDelete, vie
       <div className="card group flex items-center gap-3 p-2 pr-4 cursor-pointer hover:border-accent/50 transition" onClick={onOpen}>
         {select && <div className="pl-2">{select}</div>}
         <Thumb a={a} className="h-14 w-14 rounded-xl shrink-0" />
-        <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{a.title || '(untitled)'}</p><p className="text-xs text-muted truncate">{a.project_name} · {meta}</p></div>
+        <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{a.title || '(untitled)'}</p><p className="text-xs text-muted truncate">{a.project_name} · {meta}</p>
+          {a.meta?.message_score != null && a.description && <p className="text-xs text-muted/80 truncate">{a.description}</p>}</div>
+        <ScoreBadge a={a} />
         <StatusBadge status={a.status} />
         {trash}
       </div>
@@ -64,11 +82,13 @@ export default function AssetCard({ a, onOpen, selected, onSelect, onDelete, vie
         <Thumb a={a} className={`w-full ${a.kind === 'main_reel' || a.kind === 'short_reel' || a.kind === 'image_reel' ? 'aspect-[9/12]' : 'aspect-[4/3]'}`} />
         {select && <div className="absolute top-2 left-2 bg-bg/70 rounded p-1">{select}</div>}
         <div className="absolute top-2 right-2"><StatusBadge status={a.status} /></div>
+        <ScoreBadge a={a} className="absolute bottom-2 left-2" />
         {trash && <div className="absolute bottom-2 right-2">{trash}</div>}
       </div>
       <div className="p-3">
         <p className="text-sm font-medium line-clamp-2 min-h-[2.5rem]">{a.title || '(untitled)'}</p>
-        <p className="text-xs text-muted mt-1 truncate">{meta}</p>
+        <p className="text-xs text-muted mt-1 truncate">{[meta, a.meta?.category].filter(Boolean).join(' · ')}</p>
+        {a.meta?.message_score != null && a.description && <p className="text-xs text-muted/80 mt-0.5 line-clamp-2" title={a.description}>{a.description}</p>}
         {a.project_name && <p className="text-xs text-muted/80 truncate">{a.project_name}</p>}
       </div>
     </div>
