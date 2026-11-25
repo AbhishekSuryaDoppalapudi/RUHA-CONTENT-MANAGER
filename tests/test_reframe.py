@@ -255,6 +255,55 @@ def test_x_expr_matches_the_keyframes():
     assert media.x_expr([(0, 50.0), (5, 50.0)]) == "50.0"                          # a still camera is a plain number
 
 
+def walking_path(n, seconds=60.0, seed=3):
+    """What a real sermon gives: a key every 0.2-0.4 s, a slow walk plus jitter."""
+    rnd = random.Random(seed)
+    return [(round(seconds * i / n, 3), round(400 + 300 * np.sin(i / 17.0) + rnd.uniform(-12, 12), 1)) for i in range(n)]
+
+
+def test_a_long_camera_path_is_cut_down_to_what_ffmpeg_can_parse():
+    # a real 63 s main reel had 138 keys: FFmpeg's expression parser fails above ~95 chained terms, so the reel never rendered
+    keys = walking_path(300)
+    out = media.limit_keys(keys)
+    assert 2 < len(out) <= media.MAX_CAMERA_KEYS and out[0] == keys[0] and out[-1] == keys[-1]
+    assert [k[0] for k in out] == sorted(k[0] for k in out)
+    assert media.x_expr(keys).count("clip(") < media.MAX_CAMERA_KEYS
+    # the simplified path still follows the original (same linear model the renderer uses)
+    approx = np.interp([k[0] for k in keys], [k[0] for k in out], [k[1] for k in out])
+    err = np.abs(np.array([k[1] for k in keys]) - approx)
+    assert err.mean() < 15 and err.max() < 40
+
+
+def test_short_paths_are_left_exactly_as_they_are():
+    keys = walking_path(40)
+    assert media.limit_keys(keys, max_keys=64, tol=0.0) == [(float(t), float(x)) for t, x in keys]
+    assert media.x_expr(keys).count("clip(") <= 39
+    assert media.limit_keys([(0, 5.0)]) == [(0.0, 5.0)] and media.limit_keys([]) == []
+
+
+def test_a_straight_path_needs_only_its_end_points():
+    keys = [(i * 0.5, 100.0 + 10 * i) for i in range(200)]
+    assert media.limit_keys(keys) == [keys[0], keys[-1]]
+
+
+def test_the_expression_limit_is_real_and_ours_stays_below_it(stage, tmp_path):
+    # guards the number above: more chained terms than FFmpeg accepts makes the render fail with "Invalid argument"
+    def renders(expr):
+        p = subprocess.run(["ffmpeg", "-v", "error", "-i", str(stage), "-t", "1", "-vf", f"crop=200:360:x='{expr}':y=0", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        return p.returncode == 0
+    assert renders("+".join(["1"] * 60)) and not renders("+".join(["1"] * 400))
+    assert renders(media.x_expr(walking_path(300)))                                  # 300 keys in, a valid expression out
+
+
+def test_a_reel_with_a_very_busy_camera_path_renders(stage, tmp_path):
+    keys = [(round(10 * i / 250, 3), 100.0 + 60 * (i % 7)) for i in range(250)]       # the speaker moves all the time
+    rf = Reframe("crop", (640, 360), (270, 480), (202, 360), keys=keys, blur=[(2.0, 3.0)], backend="test", coverage=0.9, duration=10.0)
+    out = media.render_reel(stage, 0, 10, tmp_path / "busy.mp4", width=270, height=480, burn_subtitles=False, reframe=rf, crf=30, preset="ultrafast")
+    info = media.probe(out)
+    assert (info["width"], info["height"]) == (270, 480) and 9.7 < info["duration"] < 10.4
+
+
 def test_graphs_per_mode():
     g = media.reframe_graph(None, 270, 480)
     assert "force_original_aspect_ratio=increase" in g and g.endswith("[b0]")

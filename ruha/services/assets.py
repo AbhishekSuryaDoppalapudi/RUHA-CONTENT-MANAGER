@@ -136,7 +136,7 @@ def review(ctx, s, asset: GeneratedAsset, action: str, reason: str = "", comment
     return ap
 
 
-TRANSLATABLE_KINDS = ("main_reel", "short_reel", "video", "image_reel")
+TRANSLATABLE_KINDS = ("main_reel", "short_reel", "video", "image_reel", "edited_reel")
 
 
 def reel_source(s, project_id: int, asset_id) -> tuple:

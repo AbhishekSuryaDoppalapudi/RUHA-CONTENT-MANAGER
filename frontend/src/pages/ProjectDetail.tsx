@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
+import { Film, Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 import { api, Asset, fileUrl, Job, Project } from '../api'
 import { Empty, ErrorBox, Field, Loading, PageHeader, ProgressBar, Spinner, StatusBadge, Tabs, ago, fmtBytes, fmtDate, fmtDur, label, useApi, useConfirm, useDebounced, useToast, PROJECT_STATUS_OPTIONS } from '../ui'
 import AssetCard, { reelScore } from '../components/AssetCard'
@@ -65,6 +65,7 @@ export default function ProjectDetail() {
           <button className="btn-primary" disabled={!p.video || busy} onClick={() => act(() => api.post(`/api/projects/${pid}/process`, {}), 'Pipeline queued')}><Sparkles size={16} />{busy ? 'Processing…' : total ? 'Run pipeline again' : 'Generate content'}</button>
           <button className="btn-ghost" disabled={!p.video} onClick={() => setModal(true)}><Languages size={16} />Translate / dub</button>
           <button className="btn-ghost" onClick={() => setImgModal(true)}><ImageIcon size={16} />Reel from images</button>
+          <Link className="btn-ghost" to={`/projects/${pid}/editor`}><Film size={16} />Reel Editor</Link>
           <Link className="btn-ghost" to={`/review?project=${pid}`}>Review this project</Link>
           <Link className="btn-ghost" to={`/library?project=${pid}`}>Open in library</Link>
         </>} />

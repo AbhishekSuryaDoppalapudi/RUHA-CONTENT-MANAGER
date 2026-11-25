@@ -50,6 +50,9 @@ def reference_supported(ref: str, full_text: str) -> bool:
 
 def _context_block(ctxinfo: dict) -> str:
     parts = []
+    if ctxinfo.get("producer_request"):
+        parts.append("THE PRODUCER'S OWN REQUEST (follow it wherever it does not contradict the rules above or the speaker's words):\n"
+                     + str(ctxinfo["producer_request"])[:1500])
     if ctxinfo.get("preferences"):
         parts.append("OWNER PREFERENCES (follow these):\n- " + "\n- ".join(ctxinfo["preferences"]))
     if ctxinfo.get("approved_examples"):

@@ -16,6 +16,7 @@ from ruha.services import assets as asset_svc
 from ruha.services import brand as brand_svc
 from ruha.services import (carousel, clipcopy, hooks, instructions, media, planfallback, planner, projects, quotes, reelvideo,
                            reframe, selection, thumbnail, thumbs, themes)
+from ruha.services import transcripts as transcripts_svc
 from ruha.services.design import render_card, render_graphic
 log = logging.getLogger("ruha.handlers")
 from ruha.creative import formats
@@ -37,6 +38,7 @@ def register(queue):
         "translation": h_translate,
         "dubbing": h_translate,
         "video_download": h_download,
+        "reel_render": h_reel_render,
         "image_reel": h_image_reel,
         "yt_narrate": lambda app, jc: h_yt_narrate(app, jc),
         "yt_video": lambda app, jc: h_yt_video(app, jc),
@@ -89,7 +91,9 @@ def ensure_plan(app, jc, force: bool = False):
     segs = _segments(app, t["id"])
     duration = max((proj["video"] or {}).get("duration") or 0, segs[-1]["end"] if segs else 0)
     full = " ".join(x["text"] for x in segs)
-    ctxinfo = app.memory.prompt_context(jc.project_id, full[:2000])
+    ctxinfo = dict(app.memory.prompt_context(jc.project_id, full[:2000]) or {})
+    if instructions.load(proj["ws"])["extra"]:
+        ctxinfo["producer_request"] = instructions.load(proj["ws"])["extra"]
     jc.log("Planning content with the local LLM")
     try:
         with app.model_lock:
@@ -398,7 +402,7 @@ def h_download(app, jc):
     jc.progress(0.02, "Downloading video", force=True)
     tmp_dir = app.settings.tmp_dir / f"dl_{jc.job_id}"
     try:
-        path, title = ytdl.download(url, tmp_dir, int(jc.cfg.get("download.max_height", 720)),
+        path, title = ytdl.download(url, tmp_dir, int(jc.cfg.get("download.max_height", 1080)),
                                     progress=lambda f: jc.progress(0.02 + f * 0.9, "Downloading video"),
                                     log=lambda m: jc.log(m, "WARNING"))
     except ytdl.DownloadError as e:
@@ -414,8 +418,77 @@ def h_download(app, jc):
     shutil.rmtree(tmp_dir, ignore_errors=True)
     jc.log(f"Downloaded '{title}'")
     if jc.params.get("process", True):
-        app.queue.enqueue_pipeline(jc.project_id, language=jc.params.get("language"))
+        app.queue.enqueue_pipeline(jc.project_id, jc.params.get("steps") or None, language=jc.params.get("language"))
         jc.log("Queued transcription and content generation")
+
+
+# ----------------------------- Reel Editor render -------------------------------
+def h_reel_render(app, jc):
+    """Render one Reel Editor reel: a small preview (-> Ready for review) or the final (-> Rendered). Only the steps an edit
+    changed are redone (see reel_render)."""
+    from ruha.models import EditorReel
+    from ruha.services import reel_editor as ed, reel_render
+    rid, mode = int(jc.params["reel_id"]), jc.params.get("mode", "preview")
+    with app.db.session() as s:
+        row = ed.get(s, rid)
+        reel, stamp = ed.as_dict(row), row.updated_at
+    proj = _load_project(app, reel["project_id"])
+    v = proj["video"]
+    if not v:
+        raise RuntimeError("The sermon has no source video")
+    with app.db.session() as s:
+        t = transcripts_svc.latest(s, reel["project_id"])
+        stored = transcripts_svc.stored_segments(s, t.id) if t else []
+        plan = (t.plan if t else None) or {}
+    brand = brand_svc.get_brand(app, reel["project_id"])
+    opts, ws = reel["options"], proj["ws"]
+    w, h = reel_render.dims(reel["aspect"], mode)
+    sw, sh = int(v.get("width") or 0), int(v.get("height") or 0)
+    full = mode == "final"
+    theme = plan.get("visual_theme") or themes.resolve(None, plan.get("main_theme", ""))
+    bd = _brand_for_design(brand, app, ws, theme, plan.get("main_theme", ""))
+    open_card = close_card = None
+    if opts["hook"]["enabled"] and opts["hook"]["text"]:
+        open_card = render_card(ws / "editor" / f"reel_{rid}_open.png", opts["hook"]["text"], theme, bd, "open", "", size=(w, h))
+    if opts["end_card"]["enabled"] and opts["end_card"]["text"]:
+        close_card = render_card(ws / "editor" / f"reel_{rid}_close.png", "", theme, bd, "close", "", opts["end_card"]["text"], size=(w, h))
+    cfg = jc.cfg
+
+    def plan_fn(a, b, ww, hh):                       # the speaker's face is followed in the final render only
+        if not full or not (sw and sh):
+            return None
+        try:
+            track = reelvideo.face_track(cfg, v["path"], a, b, (sw, sh), jc.log, jc.cancelled)
+            return reframe.plan(track, sw, sh, ww, hh, b - a) if track else None
+        except Exception as e:
+            jc.log(f"Face tracking skipped for a segment ({e})", "WARNING")
+            return None
+    base_style = dict(cfg.get("subtitle.style", {}))
+    res = reel_render.render(source=v["path"], video_id=v["id"], reel=reel, stored=stored, workdir=ws / "editor", mode=mode,
+                             plan_fn=plan_fn, base_style=base_style, watermark=brand["watermark"] if cfg.get("render.apply_watermark", True) else None,
+                             open_card=open_card, close_card=close_card, brand_colour=(brand.get("colors") or {}).get("primary"),
+                             use_gpu=full and cfg.get("gpu.mode", "auto") != "cpu" and media.nvenc_available(),
+                             progress=lambda f, d="": jc.progress(f * 0.7, d or "Rendering"), log=jc.log)
+    with app.db.session() as s:
+        r = ed.get(s, rid)
+        unchanged = r.updated_at == stamp                 # the owner kept editing while it rendered: do not mark it done
+        if mode == "preview":
+            r.preview_path = res["path"]
+            if unchanged and r.status == "draft":
+                r.status = "ready"
+        else:
+            for old in s.query(GeneratedAsset).filter_by(project_id=r.project_id, kind="edited_reel", slot=f"edit_{rid}").all():
+                asset_svc.delete_files(app, old)
+                s.delete(old)
+            s.flush()
+            a = asset_svc.register(app, s, r.project_id, "edited_reel", Path(res["path"]), slot=f"edit_{rid}", title=r.title,
+                                   caption=opts["posts"].get("instagram", ""), video_id=v["id"], job_id=jc.job_id,
+                                   meta={"editor_reel_id": rid, "segments": reel["segments"], "aspect": reel["aspect"],
+                                         "version": reel["version"], "seconds": res["seconds"]})
+            r.asset_id = a.id
+            if unchanged and r.status == "approved":
+                r.status = "rendered"
+    return {"reel_id": rid, "mode": mode, "steps": res["steps"], "file": res["path"], "seconds": res["seconds"]}
 
 
 # ----------------------------- transcription ---------------------------------
@@ -431,9 +504,17 @@ def h_transcription(app, jc):
         existing = s.query(Transcript).filter_by(project_id=jc.project_id, video_id=v["id"]).first()
         existing_id = existing.id if existing else None
     force = bool(jc.params.get("force"))
+    reuse = None
+    if not existing_id or force:                         # the same file already transcribed in another project: reuse it
+        with app.db.session() as s:
+            sv = s.get(SourceVideo, v["id"])
+            reuse = transcripts_svc.reusable_by_hash(s, jc.project_id, sv) if (sv is not None and not force) else None
     if existing_id and not force:
         jc.log("Transcript already exists - skipping transcription")
         tid = existing_id
+    elif reuse:
+        jc.log("This exact video was transcribed before - reusing that transcript (no new transcription)")
+        tid = _store_transcript(app, jc, ws, v, reuse[0], reuse[1])
     else:
         jc.progress(0.03, "Extracting audio", force=True)
         wav = ws / "audio" / "source.wav"
@@ -839,15 +920,27 @@ def h_carousel(app, jc):
     """The sermon's main points as an Instagram carousel (5-7 slides: cover, points, closing) in the brand kit."""
     plan, tid = ensure_plan(app, jc)
     proj = _load_project(app, jc.project_id)
-    slides = carousel.assemble(plan, jc.cfg.get("carousel.slides", carousel.DEFAULT_SLIDES))
-    if not slides:
-        jc.log("The sermon gave no usable main points for a carousel", "WARNING")
-        return {"skipped": True, "slides": 0}
+    want = carousel.target_slides(jc.cfg.get("carousel.slides", carousel.DEFAULT_SLIDES))
     with app.db.session() as s:
         existing = {a.slot for a in s.query(GeneratedAsset).filter_by(project_id=jc.project_id, kind="carousel")}
     if existing and not jc.params.get("force"):
         jc.log("The carousel already exists - skipped")
         return {"skipped": True}
+    have = plan.get("carousel_outline") or []
+    if jc.params.get("new_points") or len(have) != want - 2 or plan.get("carousel_outline_v") != carousel.OUTLINE_V:
+        segs = _segments(app, tid)
+        if segs:
+            jc.log(f"Summarising the whole sermon into {want - 2} teaching points, in order")
+            with app.model_lock:
+                pts = carousel.outline(app.services.llm, jc.cfg, segs, plan, want, log=jc.log)
+            if pts:
+                plan = {**plan, "carousel_outline": pts, "carousel_outline_v": carousel.OUTLINE_V}
+                with app.db.session() as s:
+                    s.get(Transcript, tid).plan_json = json.dumps(plan, ensure_ascii=False)
+    slides = carousel.assemble(plan, want)
+    if not slides:
+        jc.log("The sermon gave no usable main points for a carousel", "WARNING")
+        return {"skipped": True, "slides": 0}
     brand = brand_svc.get_brand(app, jc.project_id)
     theme = _theme_for(app, jc, plan)
     bd = _brand_for_design(brand, app, proj["ws"], theme, plan.get("main_theme", ""))
@@ -874,6 +967,7 @@ def h_carousel(app, jc):
             asset_svc.register(app, s, jc.project_id, "carousel", out, slot=f"carousel_{i}", title=sl["headline"][:200],
                                description=sl["body"], job_id=jc.job_id, preview_path=out,
                                meta={"slide": i, "total": len(slides), "slide_kind": sl["kind"], "layout": layout,
+                                     "reference": sl["reference"], "label": sl["label"],
                                      "template_id": tpl, "size": list(size), "visual_theme": theme})
         made.append(f"carousel_{i}")
     return {"slides": len(slides), "created": made}
@@ -971,36 +1065,97 @@ def _regenerate_post(app, jc, asset_id):
     rerender_graphic(app, asset_id, reason="regenerated")
 
 
-def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str = "re-rendered"):
-    """Re-draw a poster/social image from its stored text fields as a new version."""
+GRAPHIC_KINDS = ("poster", "social_post", "carousel")
+
+
+def carousel_slide_fields(app, a) -> dict:
+    """What is written on a carousel slide besides its headline (the asset title) and message (its description):
+    the reference line and the corner label. Older slides did not store them, so they are taken from the sermon plan."""
+    meta = a.meta
+    if "reference" in meta:
+        return {"reference": meta.get("reference") or "", "label": meta.get("label") or ""}
+    ref, label = "", f"{meta.get('slide', 1)} / {meta.get('total', 1)}"
+    try:
+        t = _latest_transcript(app, a.project_id)
+        for sl in carousel.assemble((t or {}).get("plan") or {}, int(meta.get("total") or 0) or carousel.DEFAULT_SLIDES):
+            if sl["index"] == meta.get("slide"):
+                ref, label = sl["reference"], sl["label"]
+    except Exception:
+        pass
+    return {"reference": ref, "label": meta.get("label") or label}
+
+
+def _graphic_spec(app, s, a, over: dict | None = None) -> dict:
+    """The text and style a poster / social post / carousel slide is drawn from. ``over`` (headline, body, reference) replaces the
+    stored text for a preview."""
+    meta = dict(a.meta)
+    if a.kind == "poster":
+        r = s.query(Poster).filter_by(asset_id=a.id).first()
+        spec = dict(head=r.headline, body=r.quote, ref=r.subheadline, label=meta.get("label") or "Highlight", kind="poster", folder="posters")
+    elif a.kind == "social_post":
+        r = s.query(SocialPost).filter_by(asset_id=a.id).first()
+        spec = dict(head=r.headline, body=r.body, ref=r.reference, label="Encouragement", kind="social", folder="social")
+    elif a.kind == "carousel":
+        f = carousel_slide_fields(app, a)
+        spec = dict(head=a.title, body=a.description, ref=f["reference"], label=f["label"], kind="social", folder="carousel")
+    else:
+        raise LookupError("Not a poster, social post or carousel slide")
+    for k_in, k_out in (("headline", "head"), ("body", "body"), ("reference", "ref")):
+        if over and over.get(k_in) is not None:
+            spec[k_out] = over[k_in]
+    spec["meta"] = meta
+    return spec
+
+
+def _brand_of_asset(app, asset_id: int) -> dict:
     with app.db.session() as s0:
-        brand = brand_svc.get_brand(app, s0.query(GeneratedAsset.project_id).filter_by(id=asset_id).scalar())
+        return brand_svc.get_brand(app, s0.query(GeneratedAsset.project_id).filter_by(id=asset_id).scalar())
+
+
+def _draw_graphic(app, brand: dict, spec: dict, out: Path, layout: str | None, ws: Path):
+    meta = spec["meta"]
+    layout = layout or meta.get("layout", "classic")
+    size = tuple(meta.get("size") or brand["export"][spec["kind"]])
+    theme = meta.get("visual_theme")
+    if theme is None and app.config.get("design.theme_backgrounds", True):
+        theme = themes.resolve(None, f"{spec['head']} {spec['body']}")
+    render_graphic(out, spec["head"], spec["body"], spec["ref"], spec["label"], spec["kind"],
+                   _brand_for_design(brand, app, ws, theme, spec["head"]), layout, size, theme=theme)
+    return layout
+
+
+def rerender_graphic(app, asset_id: int, layout: str | None = None, reason: str = "re-rendered"):
+    """Re-draw a poster / social post / carousel slide from its stored text as a new version."""
+    brand = _brand_of_asset(app, asset_id)
     with app.db.session() as s:
         a = s.get(GeneratedAsset, asset_id)
-        if not a or a.kind not in ("poster", "social_post"):
-            raise LookupError("Not a poster or social post")
-        meta = dict(a.meta)
+        if not a or a.kind not in GRAPHIC_KINDS:
+            raise LookupError("Not a poster, social post or carousel slide")
+        spec = _graphic_spec(app, s, a)
         ws = Path(a.file_path).parent.parent
-        if a.kind == "poster":
-            r = s.query(Poster).filter_by(asset_id=a.id).first()
-            head, body, ref, label, kind = r.headline, r.quote, r.subheadline, meta.get("label") or "Highlight", "poster"
-            folder = "posters"
-        else:
-            r = s.query(SocialPost).filter_by(asset_id=a.id).first()
-            head, body, ref, label, kind = r.headline, r.body, r.reference, "Encouragement", "social"
-            folder = "social"
-        layout = layout or meta.get("layout", "classic")
-        size = tuple(meta.get("size") or brand["export"][kind])
-        out = ws / folder / f"{a.slot}_v{a.version + 1}.png"
-        theme = meta.get("visual_theme")
-        if theme is None and app.config.get("design.theme_backgrounds", True):
-            theme = themes.resolve(None, f"{head} {body}")
-        render_graphic(out, head, body, ref, label, kind, _brand_for_design(brand, app, ws, theme, head), layout, size,
-                       theme=theme)
-        meta["layout"] = layout
+        out = ws / spec["folder"] / f"{a.slot}_v{a.version + 1}.png"
+        meta = spec["meta"]
+        meta["layout"] = _draw_graphic(app, brand, spec, out, layout, ws)
+        if a.kind == "carousel":
+            meta["reference"], meta["label"] = spec["ref"] or "", spec["label"]
         asset_svc.replace_file(app, s, a, out, reason, meta=meta)
         a.preview_path = str(out)
     app.memory.index_asset(asset_id)
+
+
+def preview_graphic(app, asset_id: int, over: dict, layout: str | None = None) -> Path:
+    """Draw the image with text that is not saved yet, to a scratch file - nothing about the asset changes."""
+    brand = _brand_of_asset(app, asset_id)
+    with app.db.session() as s:
+        a = s.get(GeneratedAsset, asset_id)
+        if not a or a.kind not in GRAPHIC_KINDS or not a.file_path:
+            raise LookupError("Not a poster, social post or carousel slide")
+        spec = _graphic_spec(app, s, a, over)
+        ws = Path(a.file_path).parent.parent
+        out = ws / "drafts" / f"preview_{a.id}.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _draw_graphic(app, brand, spec, out, layout, ws)
+    return out
 
 
 # ----------------------------- re-render a reel --------------------------------

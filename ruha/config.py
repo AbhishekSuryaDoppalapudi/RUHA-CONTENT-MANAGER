@@ -163,10 +163,10 @@ PROJECT_STATUSES = ["draft", "uploaded", "processing", "review_required", "appro
                     "published", "failed", "archived"]
 ASSET_STATUSES = ["draft", "approved", "rejected", "revision_requested"]
 ASSET_KINDS = ["main_reel", "short_reel", "poster", "social_post", "subtitle", "transcript",
-               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel", "creative", "thumbnail", "carousel"]
+               "caption", "translation_video", "translation_subtitle", "audio", "video", "image_reel", "creative", "thumbnail", "carousel", "edited_reel"]
 JOB_TYPES = ["transcription", "translation", "dubbing", "reel_generation", "poster_generation",
              "social_post_generation", "carousel_generation", "thumbnail_generation", "video_rendering", "video_download", "image_reel",
-             "creative_brief", "creative_generation", "creative_benchmark", "yt_narrate", "yt_video"]
+             "creative_brief", "creative_generation", "creative_benchmark", "yt_narrate", "yt_video", "reel_render"]
 JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled"]
 CALENDAR_STATUSES = ["draft", "approved", "scheduled", "published"]
 

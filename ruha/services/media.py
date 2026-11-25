@@ -222,9 +222,41 @@ def loudness_filter(source=None, start: float = 0.0, duration: float = 0.0, meas
             f":measured_thresh={measured['input_thresh']}:offset={measured['target_offset']}:linear=true")
 
 
+MAX_CAMERA_KEYS = 64        # FFmpeg's expression parser fails above ~95 chained terms ("Invalid argument", no output at all)
+
+
+def limit_keys(keys: list, max_keys: int = MAX_CAMERA_KEYS, tol: float = 0.5) -> list:
+    """Fewest keys [(t, x)] that follow the same piecewise-linear path to within ``tol`` pixels, at most ``max_keys``.
+
+    Greedy refinement (Ramer-Douglas-Peucker with a count cap): start from the two end points and keep adding the key
+    the current line misses by the most. A long sermon with a moving speaker has hundreds of keys; the crop expression
+    can only hold about 64, so the least important ones are merged."""
+    keys = [(float(t), float(x)) for t, x in keys]
+    if len(keys) <= 2:
+        return keys
+    keep = {0, len(keys) - 1}
+    while len(keep) < max(2, int(max_keys)):
+        order = sorted(keep)
+        worst, at = tol, None
+        for a, b in zip(order, order[1:]):
+            (t0, x0), (t1, x1) = keys[a], keys[b]
+            for i in range(a + 1, b):
+                t, x = keys[i]
+                err = abs(x - (x0 + (x1 - x0) * ((t - t0) / (t1 - t0) if t1 > t0 else 0.0)))
+                if err > worst:
+                    worst, at = err, i
+        if at is None:
+            break
+        keep.add(at)
+    return [keys[i] for i in sorted(keep)]
+
+
 def x_expr(keys: list) -> str:
     """FFmpeg expression for the crop's left edge over time: piecewise linear through ``keys`` [(t, x)], written as
-    a sum of clipped ramps (no nesting, so a long camera path stays a short expression)."""
+    a sum of clipped ramps (no nesting, so a long camera path stays a short expression). Paths longer than
+    ``MAX_CAMERA_KEYS`` are simplified first (see ``limit_keys``): longer expressions make FFmpeg fail."""
+    if len(keys) > MAX_CAMERA_KEYS:
+        keys = limit_keys(keys)
     x0 = keys[0][1]
     terms = [f"{x0:.1f}"]
     for (t0, a), (t1, b) in zip(keys, keys[1:]):

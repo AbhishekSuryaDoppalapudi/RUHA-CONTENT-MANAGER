@@ -93,6 +93,7 @@ export type Asset = {
   last_review?: { action: string; actor: string; reason: string; at: string; version: number }
 }
 export type AssetDetail = Asset & {
+  slide?: { reference: string; label: string }
   versions: { version: number; title: string; caption: string; description: string; hashtags: string[]; status: string; reason: string; created_by: string; created_at: string; has_file: boolean }[]
   reviews: { id: number; action: string; actor: string; reason: string; comment: string; version: number; at: string }[]
 }

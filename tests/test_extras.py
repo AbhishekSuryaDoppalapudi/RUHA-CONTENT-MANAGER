@@ -218,6 +218,45 @@ def test_few_points_make_fewer_slides_and_none_make_none():
     assert carousel.target_slides(3) == 5 and carousel.target_slides(9) == 7 and carousel.target_slides(None) == 6
 
 
+def _talk_segments():
+    lines = ["Grace, as Romans 8 teaches, is the free gift of God and we cannot earn it.", "Faith is trusting Jesus completely every single day.",
+             "Prayer keeps our hearts close to the Father always.", "Serve the people around you with real joy.",
+             "Hope does not disappoint us because God keeps his promises.", "Forgive others as Christ forgave you at the cross."]
+    return [{"start": i * 600.0, "end": i * 600.0 + 590.0, "text": t} for i, t in enumerate(lines)]
+
+
+class _SectionLLM:
+    def __init__(self, fail=False):
+        self.fail, self.prompts = fail, []
+
+    def generate_json(self, prompt, cfg):
+        from ruha.ai.llm import LLMUnavailable
+        if self.fail:
+            raise LLMUnavailable("down")
+        self.prompts.append(prompt)
+        part = prompt.split("SERMON PART:\n")[1]
+        return {"title": "Point", "text": part.strip(), "scripture": "Romans 8" if "Grace" in part else ("Mark 16:15" if "Faith" in part else "")}
+
+
+def test_the_outline_follows_the_whole_talk_in_order_one_point_per_part():
+    segs = _talk_segments()
+    llm = _SectionLLM()
+    pts = carousel.outline(llm, {}, segs, {"main_theme": "m", "summary": "s"}, 7)
+    assert len(pts) == 5 and [p["part"] for p in pts] == [1, 2, 3, 4, 5]
+    assert [p["start"] for p in pts] == sorted(p["start"] for p in pts) and pts[0]["start"] == 0.0
+    assert pts[-1]["end"] == segs[-1]["end"]                                   # the last part reaches the end of the talk
+    assert pts[1].get("scripture") is None                                     # "Mark" is never said in that part: not shown
+    assert pts[0]["scripture"] == "Romans 8" and all("Summary of the whole sermon: s" in p for p in llm.prompts)
+    slides = carousel.assemble({"title": "T", "main_theme": "m", "carousel_outline": pts}, 7)
+    assert [s["kind"] for s in slides] == ["cover"] + ["point"] * 5 + ["closing"] and slides[1]["reference"] == "Romans 8"
+
+
+def test_the_outline_falls_back_to_the_talks_own_sentences_when_the_model_is_down():
+    pts = carousel.outline(_SectionLLM(fail=True), {}, _talk_segments(), {}, 5)
+    assert len(pts) == 3 and all(p["text"] for p in pts)
+    assert pts[0]["start"] < pts[1]["start"] < pts[2]["start"]
+
+
 # =============================================================== thumbs.py - the best frame
 class Tape:
     """Fake face detector / eye checker driven by the frame number: the sampler yields 2 frames a second, in order."""
@@ -903,3 +942,34 @@ def test_deleting_a_project_removes_the_new_files(client, ctx, processed):
     assert paths and all(Path(p).exists() for p in paths)
     assert client.delete(f"/api/projects/{processed}?confirm=true").status_code == 200
     assert not any(Path(p).exists() for p in paths)
+
+
+# =============================================================== editing a carousel slide's text redraws the slide
+def test_editing_a_slides_text_redraws_the_image_and_previews_are_not_saved(client, ctx, processed):
+    s = assets(client, processed, "carousel")[1]
+    d = client.get(f"/api/assets/{s['id']}").json()
+    assert d["slide"]["label"] == f"2 / {s['meta']['total']}" and "reference" in d["slide"]
+    _, before = raw(ctx, s["id"])
+    old_bytes = open(before, "rb").read()
+    # a live preview draws the new text without touching the asset
+    p = client.post(f"/api/assets/{s['id']}/draw-preview", json={"headline": "Brand new headline", "body": "A corrected sentence.", "reference": "John 3:16"})
+    assert p.status_code == 200 and p.headers["content-type"] == "image/png" and p.content[:4] == b"\x89PNG"
+    assert p.content != old_bytes
+    again = client.get(f"/api/assets/{s['id']}").json()
+    assert again["version"] == d["version"] and again["title"] == d["title"]
+    # saving the corrected text redraws the real file as a new version
+    r = client.patch(f"/api/assets/{s['id']}", json={"title": "Brand new headline", "description": "A corrected sentence.",
+                                                       "slide": {"reference": "John 3:16"}})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["title"] == "Brand new headline" and out["description"] == "A corrected sentence." and out["slide"]["reference"] == "John 3:16"
+    assert out["version"] > d["version"]
+    meta, path = raw(ctx, s["id"])
+    assert open(path, "rb").read() != old_bytes and meta["reference"] == "John 3:16" and meta["slide"] == s["meta"]["slide"]
+    # redrawing in another layout is a new version too; an unknown layout is refused
+    v = out["version"]
+    assert client.post(f"/api/assets/{s['id']}/redraw", json={"layout": "centered"}).json()["version"] == v + 1
+    assert client.post(f"/api/assets/{s['id']}/redraw", json={"layout": "nope"}).status_code == 400
+    # only graphics can be previewed
+    thumb = assets(client, processed, "thumbnail")[0]
+    assert client.post(f"/api/assets/{thumb['id']}/draw-preview", json={"headline": "x"}).status_code == 400

@@ -105,7 +105,8 @@ class FasterWhisperTranscriber:
                 text = seg.text.strip()
                 if text:
                     item = {"start": float(seg.start), "end": float(seg.end), "text": text}
-                    words = [{"w": w.word, "s": round(float(w.start), 2), "e": round(float(w.end), 2)}
+                    words = [{"w": w.word, "s": round(float(w.start), 2), "e": round(float(w.end), 2),
+                              "p": round(float(getattr(w, "probability", 1.0) or 0.0), 3)}
                              for w in (getattr(seg, "words", None) or []) if str(w.word).strip()]
                     if words:
                         item["words"] = words                  # word timestamps drive the caption styles

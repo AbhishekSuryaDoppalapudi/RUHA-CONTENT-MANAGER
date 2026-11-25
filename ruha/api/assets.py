@@ -40,6 +40,17 @@ class SocialFields(BaseModel):
     reference: str | None = None
 
 
+class SlideFields(BaseModel):
+    reference: str | None = None
+
+
+class DrawIn(BaseModel):
+    headline: str | None = None
+    body: str | None = None
+    reference: str | None = None
+    layout: str | None = None
+
+
 class AssetPatch(BaseModel):
     title: str | None = None
     description: str | None = None
@@ -47,6 +58,7 @@ class AssetPatch(BaseModel):
     hashtags: list | None = None
     poster: PosterFields | None = None
     social_post: SocialFields | None = None
+    slide: SlideFields | None = None
 
 
 class ReviewIn(BaseModel):
@@ -72,9 +84,11 @@ class DownloadIn(BaseModel):
     video_ids: list = []
 
 
-def _detail(s, a: GeneratedAsset) -> dict:
+def _detail(s, a: GeneratedAsset, ctx=None) -> dict:
     d = svc.serialize(a, s)
     d["tags"] = project_svc.get_tags(s, "asset", a.id)
+    if a.kind == "carousel":
+        d["slide"] = handlers.carousel_slide_fields(ctx, a) if ctx else {"reference": "", "label": ""}
     d["project_name"] = s.query(Project.name).filter_by(id=a.project_id).scalar()
     d["versions"] = [{"version": v.version, "title": v.title, "caption": v.caption, "description": v.description,
                       "hashtags": json.loads(v.hashtags_json or "[]"), "status": v.status, "reason": v.reason,
@@ -103,7 +117,7 @@ def list_assets(project_id: int | None = None, kind: str = "", status: str = "",
 @router.get("/assets/{aid}")
 def get_asset(aid: int, ctx=Depends(app_ctx)):
     with ctx.db.session() as s:
-        return _detail(s, get_or_404(s, GeneratedAsset, aid, "Asset"))
+        return _detail(s, get_or_404(s, GeneratedAsset, aid, "Asset"), ctx)
 
 
 @router.patch("/assets/{aid}")
@@ -113,7 +127,17 @@ def patch_asset(aid: int, body: AssetPatch, ctx=Depends(app_ctx)):
         a = get_or_404(s, GeneratedAsset, aid, "Asset")
         fields = {k: v for k, v in body.model_dump(include={"title", "description", "caption", "hashtags"}).items()
                   if v is not None}
+        before = (a.title, a.description)
         svc.edit(ctx, s, a, fields)
+        if a.kind == "carousel":                       # a slide's headline and message are its title and description
+            changed_text = (a.title, a.description) != before
+            if body.slide and body.slide.reference is not None:
+                cur = handlers.carousel_slide_fields(ctx, a)
+                if body.slide.reference != cur["reference"]:
+                    m = dict(a.meta)
+                    m["reference"], m["label"] = body.slide.reference, cur["label"]
+                    a.metadata_json = json.dumps(m, ensure_ascii=False, default=str)
+                    changed_text = True
         if body.poster and a.kind == "poster":
             r = s.query(Poster).filter_by(asset_id=aid).first()
             for k, v in body.poster.model_dump(exclude_none=True).items():
@@ -131,7 +155,38 @@ def patch_asset(aid: int, body: AssetPatch, ctx=Depends(app_ctx)):
     else:
         ctx.memory.index_asset(aid)
     with ctx.db.session() as s:
-        return _detail(s, s.get(GeneratedAsset, aid))
+        return _detail(s, s.get(GeneratedAsset, aid), ctx)
+
+
+@router.post("/assets/{aid}/draw-preview")
+def draw_preview(aid: int, body: DrawIn, ctx=Depends(app_ctx)):
+    """Draw a poster / social post / carousel slide with text that is not saved yet (a live preview). Changes nothing."""
+    with ctx.db.session() as s:
+        a = get_or_404(s, GeneratedAsset, aid, "Asset")
+        if a.kind not in handlers.GRAPHIC_KINDS:
+            raise HTTPException(400, "Only posters, social posts and carousel slides can be previewed")
+    over = {k: v for k, v in body.model_dump(exclude={"layout"}).items() if v is not None}
+    try:
+        path = handlers.preview_graphic(ctx, aid, over, body.layout)
+    except Exception as e:
+        raise HTTPException(500, f"Could not draw the preview: {str(e)[:200]}")
+    r = file_response(ctx, str(path), media_type="image/png")
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+@router.post("/assets/{aid}/redraw")
+def redraw(aid: int, body: DrawIn, ctx=Depends(app_ctx)):
+    """Redraw a poster / social post / carousel slide right now from its text (optionally in another layout) as a new version."""
+    with ctx.db.session() as s:
+        a = get_or_404(s, GeneratedAsset, aid, "Asset")
+        if a.kind not in handlers.GRAPHIC_KINDS:
+            raise HTTPException(400, "Only posters, social posts and carousel slides can be redrawn")
+    if body.layout not in (None, "classic", "band", "centered"):
+        raise HTTPException(400, "Unknown layout")
+    handlers.rerender_graphic(ctx, aid, layout=body.layout, reason="layout changed" if body.layout else "redrawn")
+    with ctx.db.session() as s:
+        return _detail(s, s.get(GeneratedAsset, aid), ctx)
 
 
 @router.post("/assets/{aid}/review")
@@ -143,7 +198,7 @@ def review(aid: int, body: ReviewIn, ctx=Depends(app_ctx)):
     if body.action in ("approve", "reject", "revise"):
         ctx.memory.set_outcome(aid, {"approve": "approved", "reject": "rejected", "revise": "revision_requested"}[body.action])
     with ctx.db.session() as s:
-        return _detail(s, s.get(GeneratedAsset, aid))
+        return _detail(s, s.get(GeneratedAsset, aid), ctx)
 
 
 @router.post("/assets/{aid}/versions/{version}/restore")
@@ -157,7 +212,7 @@ def restore_version(aid: int, version: int, ctx=Depends(app_ctx)):
                              "hashtags": json.loads(v.hashtags_json or "[]")})
     ctx.memory.index_asset(aid)
     with ctx.db.session() as s:
-        return _detail(s, s.get(GeneratedAsset, aid))
+        return _detail(s, s.get(GeneratedAsset, aid), ctx)
 
 
 @router.post("/assets/{aid}/regenerate", status_code=202)

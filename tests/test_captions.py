@@ -507,7 +507,7 @@ def test_whisper_returns_word_times(monkeypatch):
     fake_whisper(monkeypatch, calls)
     segs, _ = W.FasterWhisperTranscriber().transcribe("x.wav", CFG)
     assert calls[0]["word_timestamps"] is True                                           # on by default
-    assert segs[0]["words"] == [{"w": " God", "s": 0.1, "e": 0.5}, {"w": " is", "s": 0.5, "e": 0.7}, {"w": " good", "s": 0.7, "e": 1.2}]
+    assert segs[0]["words"] == [{"w": " God", "s": 0.1, "e": 0.5, "p": 0.9}, {"w": " is", "s": 0.5, "e": 0.7, "p": 0.9}, {"w": " good", "s": 0.7, "e": 1.2, "p": 0.9}]
     assert "words" not in segs[1]                                                        # a segment without words stays valid
 
 
@@ -538,7 +538,8 @@ def test_migration_adds_the_word_column_without_touching_old_data(tmp_path, monk
     monkeypatch.undo()
     database.dispose()
     database = dbmod.Database(tmp_path / "old.db")
-    assert database.migrate() == ["0002_segment_words.sql"] and database.schema_version() == 2
+    applied = database.migrate()
+    assert applied[0] == "0002_segment_words.sql" and database.schema_version() == 1 + len(applied)
     con = sqlite3.connect(tmp_path / "old.db")
     assert "words_json" in [r[1] for r in con.execute("PRAGMA table_info(transcript_segments)")]
     con.close()

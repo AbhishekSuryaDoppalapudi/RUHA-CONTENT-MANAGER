@@ -16,6 +16,7 @@ import Analytics from './pages/Analytics'
 import SettingsPage from './pages/Settings'
 import Creative from './pages/Creative'
 import YtVideo from './pages/YtVideo'
+import ReelEditor from './pages/ReelEditor'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -110,6 +111,7 @@ function Shell() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/projects/:id/editor" element={<ReelEditor />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/creative" element={<Creative />} />
             <Route path="/yt" element={<YtVideo />} />

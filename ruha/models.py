@@ -379,3 +379,49 @@ class AuditLog(Base):
     detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     __table_args__ = (Index("ix_audit_entity", "entity_type", "entity_id"),)
+
+
+class EditorReel(Base, JSONMixin):
+    """A reel the owner builds in the Reel Editor: an ordered list of segments of the sermon plus how it looks."""
+    __tablename__ = "editor_reels"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft")      # draft | ready | approved | rendered
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    language: Mapped[str] = mapped_column(String(40), default="English")
+    aspect: Mapped[str] = mapped_column(String(8), default="9:16")
+    options_json: Mapped[str] = mapped_column(Text, default="{}")          # caption style, hook, lower third, end card, music, posts...
+    caption_edits_json: Mapped[str] = mapped_column(Text, default="{}")    # {"<segment idx>:<word idx>": "corrected word"}
+    source: Mapped[str] = mapped_column(String(60), default="manual")
+    cut_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # what the cached joined cut was made from
+    preview_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("generated_assets.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    segments = relationship("ReelSegment", cascade="all, delete-orphan", order_by="ReelSegment.position")
+
+    @property
+    def options(self): return self._load(self.options_json, {})
+    @property
+    def caption_edits(self): return self._load(self.caption_edits_json, {})
+
+
+class ReelSegment(Base):
+    __tablename__ = "reel_segments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reel_id: Mapped[int] = mapped_column(ForeignKey("editor_reels.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    start: Mapped[float] = mapped_column(Float)
+    end: Mapped[float] = mapped_column("end", Float)
+
+
+class ReelVersion(Base):
+    __tablename__ = "reel_versions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reel_id: Mapped[int] = mapped_column(ForeignKey("editor_reels.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    note: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("reel_id", "version"),)

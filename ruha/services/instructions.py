@@ -125,11 +125,12 @@ def load(ws: Path) -> dict:
     return {"reels": str(d.get("reels") or ""), "posters": str(d.get("posters") or ""),
             "topic": selection.clean_topic(d.get("topic")),
             "caption_template": _template(d.get("caption_template")),
+            "extra": str(d.get("extra") or "")[:1500],
             "generated": d.get("generated") if isinstance(d.get("generated"), dict) else {}}
 
 
 def save(ws: Path, reels: str, posters: str, generated: dict | None = None, topic: str | None = None,
-         caption_template: str | None = None) -> None:
+         caption_template: str | None = None, extra: str | None = None) -> None:
     posters = (posters or "").strip()
     if len(posters) > MAX_POSTER_CHARS:
         raise InstructionError(f"The posters box is too long (max {MAX_POSTER_CHARS} characters).")
@@ -139,6 +140,7 @@ def save(ws: Path, reels: str, posters: str, generated: dict | None = None, topi
         {"reels": (reels or "").strip(), "posters": posters,
          "topic": cur["topic"] if topic is None else selection.clean_topic(topic),
          "caption_template": cur["caption_template"] if caption_template is None else _template(caption_template, strict=True),
+         "extra": cur["extra"] if extra is None else str(extra).strip()[:1500],
          "generated": cur["generated"] if generated is None else generated}, ensure_ascii=False, indent=1), encoding="utf-8")
 
 

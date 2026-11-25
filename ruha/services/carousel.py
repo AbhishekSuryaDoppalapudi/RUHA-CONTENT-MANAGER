@@ -15,6 +15,7 @@ MIN_SLIDES, MAX_SLIDES, DEFAULT_SLIDES = 5, 7, 6
 MIN_WORDS, MAX_WORDS = 4, 30
 TITLE_MAX = 6
 GROUNDED = 0.5
+OUTLINE_V = 1                  # bump to rebuild stored outlines
 MAX_POINTS = MAX_SLIDES - 2
 
 
@@ -72,6 +73,77 @@ def candidates(raw, plan: dict, full_text: str) -> list:
     return out[:MAX_POINTS]
 
 
+def sections(segments: list, n: int) -> list:
+    """The talk cut into ``n`` consecutive parts of about equal length (by characters), each a list of segments, in order."""
+    segments = [s for s in segments if str(s.get("text", "")).strip()]
+    n = max(1, min(int(n), len(segments)))
+    total = sum(len(s["text"]) for s in segments) or 1
+    out, cur, size = [], [], 0
+    for s in segments:
+        cur.append(s)
+        size += len(s["text"])
+        if len(out) < n - 1 and size >= total * (len(out) + 1) / n:
+            out.append(cur)
+            cur = []
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _section_prompt(text: str, i: int, n: int, plan: dict) -> str:
+    return (f"You are making an Instagram carousel that teaches this sermon in order. The whole sermon is about: "
+            f"{plan.get('main_theme', '')}\nSummary of the whole sermon: {plan.get('summary', '')}\n\n"
+            f"Below is part {i} of {n} of the sermon, in the order it was preached. State the ONE teaching point the speaker "
+            f"makes in THIS part, in simple words true to what was said (do not invent, do not use anything from other parts). "
+            'Return ONLY JSON: {"title":"2-6 words","text":"the point in one or two sentences, max 28 words",'
+            '"scripture":"a Bible reference the speaker says in this part, else empty"}\n\nSERMON PART:\n' + text)
+
+
+def _best_sentence(text: str) -> str:
+    """No-AI choice for a section: the sentence of usable length with the most content words."""
+    best, score = "", -1
+    for s in hooks.sentences(text):
+        n = len(s.split())
+        if MIN_WORDS <= n <= MAX_WORDS:
+            c = sum(1 for w in s.split() if not emphasis.is_filler(w))
+            if c > score:
+                best, score = s, c
+    return best
+
+
+def outline(llm, cfg: dict, segments: list, plan: dict, target=DEFAULT_SLIDES, log=print) -> list:
+    """The sermon's teaching in sequence: one point per consecutive part of the whole talk, so nothing is skipped and the order
+    is the speaker's. Each point is written (by the model, given the whole-sermon summary) from its own part only and kept only
+    when grounded in it; when the model fails or invents, that part's best sentence is used instead."""
+    from ruha.ai.llm import LLMUnavailable
+    from ruha.services import planner
+    n = max(1, target_slides(target) - 2)
+    full = " ".join(s["text"] for s in segments)
+    points, ai_ok = [], True
+    for i, part in enumerate(sections(segments, n), 1):
+        text = " ".join(s["text"] for s in part)
+        p = None
+        if ai_ok:
+            try:
+                raw = llm.generate_json(_section_prompt(text[:9000], i, n, plan), cfg)
+                if isinstance(raw, dict):
+                    p = clean_point(raw.get("title"), raw.get("text") or raw.get("point"), text)
+                    ref = str(raw.get("scripture") or "").strip()[:60]
+                    if p and ref and planner.reference_supported(ref, text):      # only a book the speaker names in this part
+                        p["scripture"] = ref
+            except LLMUnavailable:
+                ai_ok = False
+                log("The AI model is not reachable; carousel points are taken from the sermon's own sentences", "WARNING")
+            except Exception as e:                                        # a bad answer for one part must not stop the rest
+                log(f"Carousel part {i}: the AI answer was not usable ({e})", "WARNING")
+        if p is None:
+            p = clean_point(None, _best_sentence(text), text)
+        if p and all(_overlap(p["text"], q["text"]) < 0.8 for q in points):
+            p.update(start=round(part[0]["start"], 1), end=round(part[-1]["end"], 1), part=i)
+            points.append(p)
+    return points
+
+
 def target_slides(value) -> int:
     try:
         return max(MIN_SLIDES, min(MAX_SLIDES, int(value)))
@@ -83,7 +155,7 @@ def assemble(plan: dict, target=DEFAULT_SLIDES) -> list:
     """The slides: [{"kind": cover|point|closing, "headline", "body", "label", "reference"}]. Five to seven when the sermon gave
     enough points; fewer (never under three) when it did not - nothing is invented to fill the count."""
     target = target_slides(target)
-    points = list(plan.get("carousel_points") or [])[:target - 2]
+    points = list(plan.get("carousel_outline") or plan.get("carousel_points") or [])[:target - 2]
     if not points:
         return []
     poster = plan.get("poster") or {}
@@ -91,7 +163,7 @@ def assemble(plan: dict, target=DEFAULT_SLIDES) -> list:
     theme = " ".join(_words(plan.get("main_theme"))[:20])
     slides = [{"kind": "cover", "headline": cover_head, "body": theme, "label": "Swipe", "reference": ""}]
     for p in points:
-        slides.append({"kind": "point", "headline": p["title"], "body": p["text"], "label": "", "reference": ""})
+        slides.append({"kind": "point", "headline": p["title"], "body": p["text"], "label": "", "reference": p.get("scripture", "")})
     best = None
     for c in (plan.get("main_reels") or []) + (plan.get("short_reels") or []):
         if isinstance(c, dict) and c.get("closing"):

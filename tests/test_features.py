@@ -166,6 +166,30 @@ def test_import_url_downloads_then_runs_the_pipeline(client, ctx, sample_video, 
     assert kinds.count("main_reel") == 1 and kinds.count("poster") == 1
 
 
+def test_import_url_makes_only_the_ticked_things_and_keeps_the_owners_request(client, ctx, sample_video, monkeypatch):
+    from ruha.ai import ytdl
+    from ruha.services import instructions
+
+    def fake_download(url, out_dir, max_height=720, progress=None, log=None):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dst = out_dir / "abc123.mp4"
+        shutil.copy2(sample_video, dst)
+        return dst, "A Real Talk"
+    monkeypatch.setattr(ytdl, "download", fake_download)
+    url = "https://www.youtube.com/watch?v=abc123"
+    assert client.post("/api/import-url", json={"url": url, "steps": ["nonsense"]}).status_code == 400
+    r = client.post("/api/import-url", json={"url": url, "steps": ["carousel_generation"], "extra": "Focus on forgiveness"})
+    assert r.status_code == 202
+    pid = r.json()["project_id"]
+    ctx.queue.drain()
+    kinds = {x["kind"] for x in assets(client, pid)}
+    assert "carousel" in kinds and not kinds & {"main_reel", "poster", "short_reel", "thumbnail"}, kinds
+    from ruha.models import Project
+    with ctx.db.session() as s:
+        ws = Path(s.get(Project, pid).workspace_dir)
+    assert instructions.load(ws)["extra"] == "Focus on forgiveness"
+
+
 # ------------------------------- finding work easily -------------------------
 def test_library_and_review_filter_by_project_and_status(client, ctx, processed, sample_video):
     other = client.post("/api/projects", json={"name": "Other"}).json()["id"]
@@ -312,3 +336,43 @@ def test_download_does_not_retry_an_unrelated_error(tmp_path, monkeypatch):
     with pytest.raises(ytdl.DownloadError):
         _run_download(tmp_path, monkeypatch, [Exception("Unsupported URL")])
     assert len(_FakeYDL.attempts) == 1
+
+
+# ------------------------------- Dropbox / Google Drive / Vimeo links ---------
+def test_dropbox_links_become_direct_downloads_and_folders_are_refused():
+    from ruha.ai import ytdl
+    assert ytdl.dropbox_direct("https://www.dropbox.com/scl/fi/abc/talk.mp4?rlkey=k&dl=0") == \
+        "https://www.dropbox.com/scl/fi/abc/talk.mp4?rlkey=k&dl=1"
+    assert ytdl.dropbox_direct("https://www.dropbox.com/s/abc/talk.mp4").endswith("?dl=1")
+    for folder in ("https://www.dropbox.com/scl/fo/abc/x?rlkey=k", "https://drive.google.com/drive/folders/1AbC"):
+        with pytest.raises(ytdl.DownloadError, match="folder"):
+            ytdl.download(folder, Path("."), 720)
+
+
+def test_a_direct_link_is_streamed_and_a_web_page_is_refused(tmp_path):
+    import http.server
+    import threading
+    from ruha.ai import ytdl
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            ok = self.path.startswith("/talk")
+            body = b"\x00" * 3000 if ok else b"<html>sign in</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4" if ok else "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        seen = []
+        path, title = ytdl._download_direct(f"http://127.0.0.1:{srv.server_port}/talk.mp4", tmp_path, seen.append)
+        assert path.read_bytes() == b"\x00" * 3000 and title == "talk" and seen[-1] == 1.0
+        with pytest.raises(ytdl.DownloadError, match="not a video"):
+            ytdl._download_direct(f"http://127.0.0.1:{srv.server_port}/login", tmp_path)
+    finally:
+        srv.shutdown()

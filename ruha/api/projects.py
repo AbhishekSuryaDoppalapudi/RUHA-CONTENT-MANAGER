@@ -280,6 +280,8 @@ class ImportUrlIn(BaseModel):
     content_type: str = "sermon"
     process: bool = True
     language: str | None = None
+    steps: list[str] | None = None       # what to make: any of the generation jobs (None = everything); transcription is always done
+    extra: str = Field("", max_length=1500)   # "Others": anything else the owner wants, passed to the AI planner
 
 
 @router.post("/import-url", status_code=202)
@@ -290,12 +292,23 @@ def import_url(body: ImportUrlIn, ctx=Depends(app_ctx)):
         url = ytdl.validate_url(body.url)
     except ytdl.DownloadError as e:
         raise HTTPException(400, str(e))
+    from ruha.jobs import PIPELINE
+    steps = None
+    if body.steps is not None:
+        bad = [x for x in body.steps if x not in PIPELINE]
+        if bad:
+            raise HTTPException(400, f"Unknown step(s): {', '.join(bad)}")
+        steps = ["transcription"] + [x for x in PIPELINE if x != "transcription" and x in body.steps]
     with ctx.db.session() as s:
         p = svc.create(ctx, s, body.name.strip() or "Imported video", f"Imported from {url}", body.content_type, [])
         s.flush()
-        pid = p.id
+        pid, ws = p.id, Path(p.workspace_dir)
+    if body.extra.strip():
+        from ruha.services import instructions
+        cur = instructions.load(ws)
+        instructions.save(ws, cur["reels"], cur["posters"], extra=body.extra)
     jid = ctx.queue.enqueue("video_download", pid, {"url": url, "process": body.process, "language": body.language,
-                                                    "rename": not body.name.strip()})
+                                                    "rename": not body.name.strip(), "steps": steps})
     return {"project_id": pid, "job_id": jid}
 
 
