@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import TranscriptPicker from './TranscriptPicker'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Link2, UploadCloud } from 'lucide-react'
 import { api, DUB_LANGUAGES, LANGUAGES, Project } from '../api'
@@ -56,23 +57,45 @@ export function NewProjectModal({ onClose, onCreated, withUpload = false }: { on
 }
 
 /** Paste a video link (YouTube etc.): downloads it, then runs the whole content pipeline. */
+const MAKE_OPTIONS: { step: string; label: string }[] = [
+  { step: 'reel_generation', label: 'Reels' },
+  { step: 'poster_generation', label: 'Highlight poster' },
+  { step: 'social_post_generation', label: 'Encouragement posts' },
+  { step: 'carousel_generation', label: 'Carousel (swipe through)' },
+  { step: 'thumbnail_generation', label: 'Thumbnails (1280×720)' },
+]
+
 export function ImportLinkModal({ onClose }: { onClose: () => void }) {
   const toast = useToast(), nav = useNavigate()
   const [url, setUrl] = useState(''), [name, setName] = useState(''), [busy, setBusy] = useState(false), [language, setLanguage] = useState('English')
+  const [steps, setSteps] = useState<string[]>(MAKE_OPTIONS.map((o) => o.step)), [other, setOther] = useState(false), [extra, setExtra] = useState('')
+  const toggle = (k: string) => setSteps((c) => (c.includes(k) ? c.filter((x) => x !== k) : [...c, k]))
   const submit = async () => {
     if (!/^https?:\/\//i.test(url.trim())) return toast.err('Paste a full link starting with https://')
+    if (!steps.length) return toast.err('Tick at least one thing to generate')
     setBusy(true)
     try {
-      const r = await api.post<{ project_id: number }>('/api/import-url', { url: url.trim(), name, process: true, language })
+      const r = await api.post<{ project_id: number }>('/api/import-url', { url: url.trim(), name, process: true, language, steps, extra: other ? extra.trim() : '' })
       toast.ok('Downloading - content will be generated automatically'); onClose(); nav(`/projects/${r.project_id}`)
     } catch (e) { toast.err(e) } finally { setBusy(false) }
   }
   return (
     <Modal title="Create content from a link" onClose={onClose} width="max-w-lg">
       <div className="space-y-3">
-        <Field label="Video link" hint="YouTube or another public video page"><input className="input" autoFocus value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} placeholder="https://www.youtube.com/watch?v=..." /></Field>
+        <Field label="Video link" hint="YouTube, Vimeo, Google Drive or Dropbox (shared with anyone who has the link)"><input className="input" autoFocus value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} placeholder="https://www.youtube.com/watch?v=..." /></Field>
         <Field label="Project name (optional)" hint="Defaults to the video title"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="Subtitle language" hint="Reel subtitles are written in this language (English by default)"><select className="input" value={language} onChange={(e) => setLanguage(e.target.value)}>{LANGUAGES.map((l) => <option key={l}>{l}</option>)}</select></Field>
+        <div>
+          <label className="label">What should be generated?</label>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-1">
+            {MAKE_OPTIONS.map((o) => (
+              <label key={o.step} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={steps.includes(o.step)} onChange={() => toggle(o.step)} />{o.label}</label>))}
+            <label className="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={other} onChange={() => setOther(!other)} />Others</label>
+          </div>
+          {other && <textarea className="input mt-2" rows={3} maxLength={1500} value={extra} onChange={(e) => setExtra(e.target.value)}
+            placeholder="Describe anything else you want, e.g. focus on the part about forgiveness; carousel in teaching order" />}
+        </div>
         <p className="text-xs text-muted">The video is downloaded to this computer, then transcribed and turned into reels, a poster and posts locally. Only use videos you own or have permission to use.</p>
         <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? <Spinner /> : <Link2 size={15} />}Download &amp; generate</button></div>
@@ -89,8 +112,33 @@ export function RunJobModal({ mode, onClose, projectId }: { mode: 'generate' | '
   const [target, setTarget] = useState('Hindi')
   const [dub, setDub] = useState(false)
   const [voice, setVoice] = useState('Female')
+  const [clone, setClone] = useState(false)
+  const [consent, setConsent] = useState(false)
   const [language, setLanguage] = useState('English')
+  const [assetId, setAssetId] = useState<number | ''>('')
+  const [reels, setReels] = useState<{ id: number; title: string; slot: string | null; has_file: boolean }[]>([])
+  const [reelNotes, setReelNotes] = useState('')
+  const [topic, setTopic] = useState('')
+  const [capTemplate, setCapTemplate] = useState('')          // '' = the Settings default
+  const templates = useApi(() => api.get<{ caption_templates: { id: string; label: string; note: string }[]; settings?: any }>('/api/system/status'), [])
+  const [posterNotes, setPosterNotes] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pick, setPick] = useState(false)
+  const showReelBox = mode === 'reels' || mode === 'generate'
+  const showPosterBox = mode === 'poster' || mode === 'generate'
+  // load what was saved for the chosen project, so earlier instructions are kept and can be edited
+  useEffect(() => {
+    if (!pid || !(showReelBox || showPosterBox)) return
+    api.get<{ reels: string; posters: string; topic?: string; caption_template?: string }>(`/api/projects/${pid}/instructions`)
+      .then((d) => { setReelNotes(d.reels); setPosterNotes(d.posters); setTopic(d.topic ?? ''); setCapTemplate(d.caption_template ?? '') }).catch(() => {})
+  }, [pid])
+  // finished reels of the chosen project, so one reel can be translated/dubbed instead of the whole sermon
+  useEffect(() => {
+    setAssetId(''); setReels([])
+    if (!pid || mode !== 'translate') return
+    api.get<{ id: number; title: string; slot: string | null; has_file: boolean }[]>(`/api/assets?project_id=${pid}&kind=main_reel,short_reel`)
+      .then((r) => setReels(r.filter((a) => a.has_file))).catch(() => {})
+  }, [pid, mode])
   const titles = { generate: 'Generate content', reels: 'Create reels', poster: 'Create poster', translate: 'Translate video' }
   const projects = (data?.items ?? []).filter((p) => p.video)
 
@@ -98,10 +146,11 @@ export function RunJobModal({ mode, onClose, projectId }: { mode: 'generate' | '
     if (!pid) return toast.err('Choose a project')
     setBusy(true)
     try {
+      if (showReelBox || showPosterBox) await api.put(`/api/projects/${pid}/instructions`, { reels: reelNotes, posters: posterNotes, topic, caption_template: capTemplate })
       if (mode === 'generate') await api.post(`/api/projects/${pid}/process`, { language })
       else if (mode === 'reels') await api.post(`/api/projects/${pid}/process`, { steps: ['transcription', 'reel_generation'], language })
       else if (mode === 'poster') await api.post(`/api/projects/${pid}/process`, { steps: ['transcription', 'poster_generation'] })
-      else await api.post(`/api/projects/${pid}/jobs`, { job_type: dub ? 'dubbing' : 'translation', params: { target, dub, voice, burn: false } })
+      else await api.post(`/api/projects/${pid}/jobs`, { job_type: dub ? 'dubbing' : 'translation', params: { target, dub, voice, burn: false, ...(assetId ? { asset_id: assetId } : {}), ...(dub && clone ? { clone: true, clone_consent: consent } : {}) } })
       toast.ok('Queued - follow progress in Processing'); onClose(); nav('/processing')
     } catch (e) { toast.err(e) } finally { setBusy(false) }
   }
@@ -115,17 +164,37 @@ export function RunJobModal({ mode, onClose, projectId }: { mode: 'generate' | '
           </select>
         </Field>
         {mode === 'translate' && (<>
-          <Field label="Target language"><select className="input" value={target} onChange={(e) => { setTarget(e.target.value); if (!DUB_LANGUAGES.has(e.target.value)) setDub(false) }}>{LANGUAGES.map((l) => <option key={l}>{l}</option>)}</select></Field>
+          {reels.length > 0 && <Field label="What to translate" hint="A finished reel is much faster than the whole sermon.">
+            <select className="input" value={assetId} onChange={(e) => setAssetId(Number(e.target.value) || '')}>
+              <option value="">The whole sermon video</option>
+              {reels.map((r) => <option key={r.id} value={r.id}>{r.title || r.slot || `Reel ${r.id}`}</option>)}</select></Field>}
+          <Field label="Target language"><select className="input" value={target} onChange={(e) => { setTarget(e.target.value); if (!DUB_LANGUAGES.has(e.target.value)) { setDub(false); setClone(false); setConsent(false) } }}>{LANGUAGES.map((l) => <option key={l}>{l}</option>)}</select></Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={dub} disabled={!DUB_LANGUAGES.has(target)} onChange={(e) => setDub(e.target.checked)} />
             Also dub the audio {!DUB_LANGUAGES.has(target) && <span className="text-xs text-muted">(voice not available for {target} - subtitles only)</span>}</label>
-          {dub && <Field label="Voice"><select className="input" value={voice} onChange={(e) => setVoice(e.target.value)}><option>Female</option><option>Male</option></select></Field>}
+          {dub && <Field label={clone ? "Base voice (the speaker's own voice is applied on top)" : 'Voice'}><select className="input" value={voice} onChange={(e) => setVoice(e.target.value)}><option>Female</option><option>Male</option></select></Field>}
+          {dub && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={clone} onChange={(e) => { setClone(e.target.checked); if (!e.target.checked) setConsent(false) }} />Clone the speaker's voice <span className="text-xs text-muted">(AI-generated; needs the cloning setup)</span></label>}
+          {dub && clone && <label className="flex items-start gap-2 text-sm"><input className="mt-1" type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />I have the speaker's permission to clone their voice, and the result will be labelled as AI-generated.</label>}
           <p className="text-xs text-muted">Uses the existing El Ruach Video Translator (Whisper + IndicTrans2 + Parler-TTS). Models load one at a time.</p>
         </>)}
         {(mode === 'generate' || mode === 'reels') && <Field label="Subtitle language" hint="Subtitles on the reels (English by default)"><select className="input" value={language} onChange={(e) => setLanguage(e.target.value)}>{LANGUAGES.map((l) => <option key={l}>{l}</option>)}</select></Field>}
+        {showReelBox && <Field label="Caption style for this project" hint={(templates.data?.caption_templates ?? []).find((t) => t.id === capTemplate)?.note ?? 'Uses the style chosen in Settings. Re-render a reel to apply a new style to it.'}>
+          <select className="input" value={capTemplate} onChange={(e) => setCapTemplate(e.target.value)}>
+            <option value="">Default (from Settings)</option>
+            {(templates.data?.caption_templates ?? []).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></Field>}
+        {showReelBox && <Field label="Find a moment about… (optional)" hint="A theme or word, e.g. forgiveness or fear. Reels about it are ranked higher; if the sermon never says it, the best-scoring reels are used and you are told.">
+          <input className="input" maxLength={200} value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. forgiveness" /></Field>}
+        {showReelBox && <Field label="Reels - your times and comments (optional)" hint="One reel per line: start-end, then main or short, then what you want. Times can be 12:30-13:45, 1:02:10-1:03:00 or seconds like 750-825. The AI writes the hook and caption from that part; any reels you leave out are still chosen by the AI.">
+          <textarea className="input font-mono text-sm" rows={4} value={reelNotes} onChange={(e) => setReelNotes(e.target.value)} placeholder={'12:30-13:45 main - focus on faith, hook as a question\n1:02:10-1:03:00 short - the story of the lost coin'} /></Field>}
+        {showReelBox && pid && (<div>
+          <button type="button" className="btn-ghost !py-1 text-sm" onClick={() => setPick((v) => !v)}>{pick ? 'Hide the transcript' : 'Pick the times from the transcript'}</button>
+          {pick && <div className="mt-2"><TranscriptPicker pid={Number(pid)} onAdd={(line) => setReelNotes((n) => (n.trim() ? n.trimEnd() + '\n' : '') + line)} /></div>}
+        </div>)}
+        {showPosterBox && <Field label="Posters - your instructions (optional)" hint="Describe what you want on the poster: the message, tone or wording. Times are not needed.">
+          <textarea className="input text-sm" rows={3} value={posterNotes} onChange={(e) => setPosterNotes(e.target.value)} placeholder="e.g. Quote about weakness becoming strength, warm and hopeful" /></Field>}
         {mode !== 'translate' && <p className="text-xs text-muted">Steps already completed (e.g. an existing transcript) are reused, not repeated.</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={go} disabled={busy || !pid}>{busy && <Spinner />}Start</button>
+          <button className="btn-primary" onClick={go} disabled={busy || !pid || (mode === 'translate' && dub && clone && !consent)}>{busy && <Spinner />}Start</button>
         </div>
       </div>
     </Modal>

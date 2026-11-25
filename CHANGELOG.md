@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased - thumbnails, posters, carousel, per-clip captions
+- **Best-frame thumbnails:** frames are scored by face size, eyes open (MediaPipe face landmarker, OpenCV fallback) and sharpness; reels and the
+  sermon itself use the best frame instead of a fixed one. Setting `thumbnail.best_frame`.
+- **Designed thumbnails** (new pipeline step, asset kind `thumbnail`): three 1280x720 layouts from the best frames of the main clip, its hook as 3-5
+  words and the brand kit. Settings `thumbnail.variations`.
+- **Posters:** the small label comes from the plan (the best clip's category, else its hook) instead of the fixed word, and the quote is the strongest
+  sentence of the best clip, word for word from the transcript.
+- **Carousel** (new pipeline step, asset kind `carousel`): 5-7 slides - cover, the sermon's main points, closing - in the brand kit. Points the speaker
+  never made are dropped. Setting `carousel.slides`.
+- **A caption of its own for every clip:** written from that clip's transcript and the earlier captions; a near-duplicate (the memory's embeddings
+  check) is rewritten once, then kept and flagged. Setting `reels.unique_copy`. Costs one extra AI prompt per reel.
+
+## Unreleased - better captions
+- **Keyword highlight by meaning, not length:** names of God (God, Jesus, Lord, Spirit ...) first, then Bible book names and verse numbers
+  ("John 3:16" stays in one piece), then the words the AI marked as key for that clip (only words that really occur in it), then strong
+  nouns and verbs (grace, forgive, surrender ...). Filler (articles, pronouns, "just", "really", contractions, -ly adverbs ...) is never
+  highlighted, so a phrase of only filler is shown plain.
+- **Four caption templates**, chosen per project (and a default in Settings): *Stacked* (the original), *Word pop* (one big word, the
+  previous one small above), *Karaoke* (a 3-5 word line, the spoken word in the brand colour) and *Classic* (two plain bottom lines).
+- **Real word timestamps** from faster-whisper (new setting `whisper.word_timestamps`, on by default; stored per transcript segment by a
+  new migration). Captions appear when their first word is spoken. Older transcripts, and translated captions, spread the words of a line
+  over its time as before - re-transcribe a project to get word times.
+- **Platform safe areas:** captions stay inside the safe area of each video format (the 9:16 bottom 430 px stays clear of the app's buttons).
+- **Indian-language captions** are set in a Noto Sans font per script (Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu,
+  Kannada, Malayalam, Arabic), copied next to the subtitle file, with each line in its own script's font. All four templates work for them.
+
+## Unreleased - speaker-aware reels, video formats, -14 LUFS
+- **Speaker-aware reframing** (replaces the centre crop): the speaker's face is found on 5 frames a second (MediaPipe Face Detection;
+  OpenCV YuNet is added when MediaPipe misses faces and used alone when MediaPipe cannot start), the crop follows him with a dead zone and a
+  moving average so it does not jitter, and the speaker is never cut off. Stretches of a second or more with no face show the whole frame
+  centred over a blurred, zoomed copy ("blur fill"). Tested on a clip where the speaker walks across the stage and leaves it.
+- **Video formats** 9:16 (1080x1920), 4:5 (1080x1350), 1:1 (1080x1080) and 16:9 (1920x1080), from `creative/formats.py`: choose several in
+  Settings; every reel is rendered in each (captions, hook/closing cards and cutaways are made for each size). The first is the reel's main
+  file, the others appear as a format switch on the reel and can be downloaded.
+- **Encoding:** NVENC (`h264_nvenc`) whenever it really works (checked with a test encode, not just "FFmpeg has it"), libx264 otherwise or if a
+  GPU encode fails (the old fallback left a stray argument behind and could not have worked). Loudness is normalised to **-14 LUFS** in two
+  passes (was one pass at -15).
+- Settings: `reel.formats`, `reel.face_tracking`, `reel.face_detector`. `scripts/reframe_check.py` tries it on any video and builds a
+  walking-speaker demo. Face models ship in `ruha/assets/models` (nothing is downloaded).
+
+## Unreleased - desktop models, one translator copy, dub a reel
+- **Models for an RTX 3060 12 GB:** planner default `qwen2.5:7b` with a selectable fallback (`qwen2.5:3b`, used automatically when the
+  7b model is not installed or does not fit; a failed model is skipped for 5 minutes); Whisper `large-v3-turbo` on CUDA in float16,
+  with a separate CPU model (`small`) used when there is no GPU or the GPU model cannot be loaded. Both are selectable in Settings.
+  A stored old default (`small`, `qwen2.5:3b`) is moved to the new default once; models you picked yourself are left alone.
+- **One translator copy** (`C:\Dev\indic-video-translator`, set with `RUHA_TRANSLATOR_DIR` in `.env`): RUHA's workers use
+  `dubbing_engine` (dubbing) and the new `compat.py` (YouTube narration + the old `_translate_impl`/`translate`/`speak`/`trim_silence`/`LANGS`
+  names). RUHA no longer imports the translator's Gradio `app.py`.
+- **Dub or translate one finished reel** (`asset_id` on a translation/dubbing job; a "What to translate" list in the dialog).
+- `scripts/e2e_full_sermon.py`: real-model end-to-end run with pre-flight check, per-step timings, hook check and a JSON report.
+
+## Unreleased - Creative Studio (Creative Engine 2.0)
+- **New Creative Studio page** (sidebar): content source, editable creative brief written from the transcript, eight design engines,
+  eight formats (reel cover, feed, square, YouTube thumbnail, carousel, poster, hook image), three-concept comparison, full-size preview with
+  quality-check detail, headline editor, regenerate, download, approve/reject, history. Nothing is ever auto-approved.
+- **Two-stage pipeline:** a text-free picture from a local image model (Stable Diffusion via diffusers, or ComfyUI), then professional typography
+  drawn on a transparent layer in the browser. Models run one at a time and are unloaded afterwards; hardware gate + benchmark.
+- **Quality control on real pixels:** fits, safe margins, clipping, contrast against the picture beneath, duplicates, scripture integrity.
+- No image model installed: the app says so plainly; only the typographic engine runs (labelled as typographic, not AI artwork).
+- See `docs/CREATIVE_STUDIO.md` for the audit of the old engine, architecture, model evaluation and what is/is not verified.
+
 ## Unreleased - poster engine, fonts, audio
 - **Posters, posts and reel hook/closing cards are now drawn as HTML/CSS** and captured with the installed Edge/Chrome (no extra
   download). Real typography, glow, shadows, correct Telugu/Hindi/Tamil/... shaping. Falls back to the built-in Pillow renderer

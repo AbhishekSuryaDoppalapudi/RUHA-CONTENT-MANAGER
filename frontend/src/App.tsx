@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { BarChart3, Bell, BookOpenCheck, Brain, CalendarDays, Cpu, FolderKanban, LayoutDashboard, Library, Moon, Palette, Settings as Cog, Sun } from 'lucide-react'
+import { BarChart3, Bell, BookOpenCheck, Brain, CalendarDays, Clapperboard, Cpu, FolderKanban, LayoutDashboard, Library, Moon, Palette, Settings as Cog, Sun, Wand2 } from 'lucide-react'
 import { api, CalEntry } from './api'
 import { ConfirmProvider, Logo, ToastProvider, useApi, useToast, fmtDate } from './ui'
 import Dashboard from './pages/Dashboard'
@@ -14,11 +14,16 @@ import Brand from './pages/Brand'
 import Calendar from './pages/Calendar'
 import Analytics from './pages/Analytics'
 import SettingsPage from './pages/Settings'
+import Creative from './pages/Creative'
+import YtVideo from './pages/YtVideo'
+import ReelEditor from './pages/ReelEditor'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/library', label: 'Content Library', icon: Library },
+  { to: '/creative', label: 'Creative Studio', icon: Wand2 },
+  { to: '/yt', label: 'YT Video Making', icon: Clapperboard },
   { to: '/review', label: 'Review', icon: BookOpenCheck },
   { to: '/memory', label: 'AI Memory', icon: Brain },
   { to: '/processing', label: 'Processing Centre', icon: Cpu },
@@ -106,7 +111,10 @@ function Shell() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/projects/:id/editor" element={<ReelEditor />} />
             <Route path="/library" element={<LibraryPage />} />
+            <Route path="/creative" element={<Creative />} />
+            <Route path="/yt" element={<YtVideo />} />
             <Route path="/review" element={<Review />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/processing" element={<Processing />} />

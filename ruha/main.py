@@ -56,8 +56,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"],
                        allow_headers=["*"])
 
-    from ruha.api import assets, jobs, memory, projects, studio, system
-    for mod in (projects, assets, jobs, memory, studio, system):
+    from ruha.api import assets, creative, jobs, memory, projects, reel_editor, studio, system, yt
+    for mod in (projects, assets, jobs, memory, studio, system, creative, yt, reel_editor):
         app.include_router(mod.router)
 
     @app.exception_handler(PathSecurityError)

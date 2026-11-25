@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Download, LayoutGrid, List, Search, X } from 'lucide-react'
 import { api, Asset, qs } from '../api'
-import { Empty, ErrorBox, Loading, PageHeader, useApi, useDebounced, useToast, fmtBytes } from '../ui'
+import { Empty, ErrorBox, Loading, PageHeader, useApi, useConfirm, useDebounced, useToast, fmtBytes } from '../ui'
 import AssetCard from '../components/AssetCard'
 import AssetDetail from '../components/AssetDetail'
 
@@ -10,7 +10,7 @@ const TYPES = [['', 'Everything'], ['video', 'Videos'], ['reel', 'Main reels'], 
   ['subtitle', 'Subtitles'], ['audio', 'Audio'], ['translation', 'Translations']]
 
 export default function LibraryPage() {
-  const toast = useToast()
+  const toast = useToast(), confirm = useConfirm()
   const [type, setType] = useState('')
   const [q, setQ] = useState(''); const dq = useDebounced(q)
   const [tag, setTag] = useState('')
@@ -68,6 +68,10 @@ export default function LibraryPage() {
             onChange={(e) => setSel(e.target.checked ? Object.fromEntries(data!.items.map((a) => [key(a), true])) : {})} />Select all</label><span>{data!.total} item(s)</span></div>
           <div className={view === 'grid' ? 'grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4' : 'space-y-2'}>
             {data!.items.map((a) => <AssetCard key={key(a)} a={a} view={view} selected={!!sel[key(a)]} onSelect={(v) => setSel({ ...sel, [key(a)]: v })}
+              onDelete={a.entity === 'video' ? undefined : async () => {
+                if (!(await confirm({ title: `Delete “${a.title || 'this item'}”?`, body: 'The file and all its versions are removed from disk. This cannot be undone.', confirm: 'Delete', danger: true }))) return
+                try { await api.del(`/api/assets/${a.id}`); toast.ok('Deleted'); reload() } catch (e) { toast.err(e) }
+              }}
               onOpen={() => a.entity === 'video' ? window.open(`/api/videos/${a.id}/stream`, '_blank') : setOpen(a.id)} />)}
           </div>
         </>)}

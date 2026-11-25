@@ -1,0 +1,13 @@
+{
+  "duration": 170.6,
+  "plan_error": "PlanError: Could not produce a valid content plan: A main_reels entry is too short after snapping to the transcript.",
+  "plan_perf": {
+    "seconds": 350.3,
+    "free_gb_start": 2.18,
+    "free_gb_min": 0.08,
+    "python_peak_rss_gb": 0.09,
+    "cpu_avg_pct": 86.0,
+    "cpu_max_pct": 100.0,
+    "aborted_for_low_ram": true
+  }
+}

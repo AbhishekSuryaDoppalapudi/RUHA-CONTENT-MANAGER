@@ -6,25 +6,36 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from ruha import __version__
+from ruha.ai.whisper import WHISPER_LANGUAGES
 from ruha.api.deps import app_ctx, file_response
 from ruha.config import DEFAULT_CONFIG, QUALITY_CRF, ROOT
+from ruha.creative import formats as video_formats
 from ruha.security import temp_file
 from ruha.models import (GeneratedAsset, ProcessingJob, Project, SourceVideo)
 from ruha.services import backup as backup_svc
 from ruha.services import insights
+from ruha.services import projects as project_svc
+from ruha.services import selection
 from ruha.services import system as sysinfo
 
 router = APIRouter(prefix="/api", tags=["system"])
 
 VALID = {
     "whisper.model": lambda v: v in sysinfo.WHISPER_MODELS,
+    "whisper.cpu_model": lambda v: v in sysinfo.WHISPER_MODELS,
+    "whisper.compute_type": lambda v: v in ("auto", "float16", "int8_float16", "int8", "float32"),
+    "llm.model": lambda v: isinstance(v, str) and 0 < len(v.strip()) <= 100,
+    "llm.fallback_model": lambda v: isinstance(v, str) and len(v.strip()) <= 100,
     "whisper.device": lambda v: v in ("auto", "cuda", "cpu"),
+    "whisper.word_timestamps": lambda v: isinstance(v, bool),
+    "subtitle.template": lambda v: v in ("stacked", "wordpop", "karaoke", "classic"),
+    "whisper.language": lambda v: v == "auto" or v in WHISPER_LANGUAGES,
     "gpu.mode": lambda v: v in ("auto", "gpu", "cpu"),
     "render.quality": lambda v: v in QUALITY_CRF,
     "render.width": lambda v: isinstance(v, int) and 240 <= v <= 4320,
@@ -34,7 +45,21 @@ VALID = {
     "llm.temperature": lambda v: isinstance(v, (int, float)) and 0 <= v <= 2,
     "logging.level": lambda v: v in ("DEBUG", "INFO", "WARNING", "ERROR"),
     "llm.base_url": lambda v: isinstance(v, str) and v.startswith(("http://localhost", "http://127.0.0.1")),
-    "gpu.min_free_ram_gb": lambda v: isinstance(v, (int, float)) and 0 <= v <= 64,
+    "gpu.min_free_ram_gb": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 1.0 <= v <= 64,
+    "hook.one_word": lambda v: isinstance(v, bool),
+    "reel.formats": lambda v: isinstance(v, list) and 1 <= len(v) <= len(video_formats.VIDEO_FORMATS)
+                              and len(set(v)) == len(v) and all(x in video_formats.VIDEO_FORMATS for x in v),
+    "reel.face_tracking": lambda v: isinstance(v, bool),
+    "reel.face_detector": lambda v: v in ("auto", "mediapipe", "opencv"),
+    "reels.unique_copy": lambda v: isinstance(v, bool),
+    "thumbnail.best_frame": lambda v: isinstance(v, bool),
+    "thumbnail.variations": lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 3,
+    "carousel.slides": lambda v: isinstance(v, int) and not isinstance(v, bool) and 5 <= v <= 7,
+    "reels.count": lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= selection.MAX_COUNT,
+    "reels.min_s": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 10 <= v <= 170,
+    "reels.max_s": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 15 <= v <= 180,
+    "jobs.auto_retries": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 10,
+    "jobs.retry_backoff_s": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 3600,
 }
 
 
@@ -75,6 +100,20 @@ def status(ctx=Depends(app_ctx)):
     return sysinfo.system_status(ctx)
 
 
+@router.get("/system/orphan-workspaces")
+def orphan_workspaces(ctx=Depends(app_ctx)):
+    """Project folders that no project owns (left behind by a delete that could not finish)."""
+    with ctx.db.session() as s:
+        return {"items": project_svc.orphan_workspaces(ctx, s)}
+
+
+@router.post("/system/orphan-workspaces/cleanup")
+def cleanup_orphans(confirm: bool = Query(False), include_files: bool = Query(False), ctx=Depends(app_ctx)):
+    """Dry run unless confirm=true. Only empty folders are removed unless include_files=true."""
+    with ctx.db.session() as s:
+        return project_svc.cleanup_orphan_workspaces(ctx, s, dry_run=not confirm, include_files=include_files)
+
+
 @router.get("/system/info")
 def info(ctx=Depends(app_ctx)):
     s = ctx.settings
@@ -104,6 +143,10 @@ def put_settings(body: SettingsIn, ctx=Depends(app_ctx)):
         check = VALID.get(k)
         if check and not check(v):
             raise HTTPException(400, f"Invalid value for '{k}'")
+    if {"reels.min_s", "reels.max_s"} & set(body.values):                        # the two must make a real range
+        merged = {**ctx.config.all(), **body.values}
+        if merged["reels.max_s"] - merged["reels.min_s"] < 5:
+            raise HTTPException(400, "The longest reel must be at least 5 seconds longer than the shortest.")
     vals = ctx.config.set_many(body.values)
     if "queue.paused" in body.values:
         ctx.queue._wake.set()

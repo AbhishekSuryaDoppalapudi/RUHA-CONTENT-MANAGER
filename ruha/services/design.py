@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import logging
 
-from ruha.services import htmlrender, themes
+from ruha.services import htmlrender, keywords, themes
 
 log = logging.getLogger("ruha.design")
 
@@ -108,16 +108,7 @@ def _gradient(size, top, bottom):
     return img
 
 
-_STOP = {"the", "and", "for", "that", "this", "with", "you", "your", "are", "not", "but", "his", "her", "its",
-         "from", "have", "has", "was", "were", "will", "into", "over", "they", "them", "our", "all", "can",
-         "who", "what", "when", "then", "than", "join", "stop", "keep", "never", "every", "against"}
-
-
-def _key_words(text: str, n: int = 2) -> set:
-    """The strongest 1-2 words of a hook (longest non-trivial words) get the accent colour."""
-    words = [w.strip(".,!?;:\"'()").lower() for w in (text or "").split()]
-    cand = sorted({w for w in words if len(w) > 4 and w not in _STOP}, key=len, reverse=True)
-    return set(cand[:n])
+_key_words = keywords.key_words       # the one shared accent-word rule
 
 
 def _soft_glow(img, box, colour, alpha, blur):

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { CalendarPlus, Check, Download, History, MessageSquare, RefreshCw, RotateCcw, Save, Trash2, X } from 'lucide-react'
 import { api, AssetDetail as Detail, fileUrl } from '../api'
 import { Field, Loading, Modal, ErrorBox, StatusBadge, Spinner, fmtDate, fmtDur, useApi, useConfirm, useToast, label } from '../ui'
-import { KIND_LABEL } from './AssetCard'
+import { KIND_LABEL, PART_LABEL, ScoreBadge } from './AssetCard'
 
 type Props = { id: number; onClose: () => void; onChanged?: () => void }
 
@@ -12,17 +12,20 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
   const { data: a, error, loading, reload, setData } = useApi(() => api.get<Detail>(`/api/assets/${id}`), [id])
   const [f, setF] = useState({ title: '', caption: '', description: '', hashtags: '' })
   const [sub, setSub] = useState<Record<string, string>>({})
+  const [fmt, setFmt] = useState<string | null>(null)        // which format of the reel is playing (null = its main one)
   const [times, setTimes] = useState({ start: '', end: '' })
   const [busy, setBusy] = useState('')
   const [reason, setReason] = useState('')
   const [comment, setComment] = useState('')
   const [text, setText] = useState<string | null>(null)
   const [tab, setTab] = useState<'edit' | 'history'>('edit')
+  const [draft, setDraft] = useState<{ url: string; busy: boolean; err: string }>({ url: '', busy: false, err: '' })
 
   useEffect(() => {
     if (!a) return
     setF({ title: a.title, caption: a.caption, description: a.description, hashtags: a.hashtags.join(' ') })
-    setSub({ ...(a.poster || {}), ...(a.social_post || {}) } as any)
+    setSub({ ...(a.poster || {}), ...(a.social_post || {}), ...(a.slide ? { reference: a.slide.reference } : {}) } as any)
+    setDraft((d) => { if (d.url) URL.revokeObjectURL(d.url); return { url: '', busy: false, err: '' } })
     setTimes({ start: String(a.reel?.start ?? ''), end: String(a.reel?.end ?? '') })
     if (['transcript', 'subtitle', 'translation_subtitle', 'caption'].includes(a.kind)) api.get<{ text: string }>(`/api/assets/${id}/text`).then((r) => setText(r.text)).catch(() => setText(null))
   }, [a?.version, a?.id]) // eslint-disable-line
@@ -34,6 +37,7 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
   const save = () => run('save', async () => {
     const body: any = { title: f.title, caption: f.caption, description: f.description, hashtags: f.hashtags.split(/[\s,]+/).filter(Boolean) }
     if (a!.poster) body.poster = { headline: sub.headline, subheadline: sub.subheadline, quote: sub.quote }
+    if (a!.slide) body.slide = { reference: sub.reference ?? '' }
     if (a!.social_post) body.social_post = { headline: sub.headline, body: sub.body, reference: sub.reference }
     setData(await api.patch<Detail>(`/api/assets/${id}`, body))
   }, 'Saved as a new version')
@@ -50,7 +54,34 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
 
   const isReel = a?.kind === 'main_reel' || a?.kind === 'short_reel' || a?.kind === 'image_reel'
   const isGraphic = a?.kind === 'poster' || a?.kind === 'social_post'
-  const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post'].includes(a.kind)
+  const isSlide = a?.kind === 'carousel'                  // a carousel slide: title = headline, description = message
+  const canDraw = isGraphic || isSlide
+  const isPlainImage = a?.kind === 'thumbnail' || a?.kind === 'carousel'
+  const reviewable = a && ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post', 'creative'].includes(a.kind)
+
+  // Live preview: a moment after typing stops, draw the image with the text as it is now (nothing is saved).
+  const texts = canDraw && a ? (isSlide ? { headline: f.title, body: f.description, reference: sub.reference ?? '' }
+    : a.poster ? { headline: sub.headline ?? '', body: sub.quote ?? '', reference: undefined } : { headline: sub.headline ?? '', body: sub.body ?? '', reference: sub.reference ?? '' }) : null
+  const saved = !a ? null : isSlide ? { headline: a.title, body: a.description, reference: a.slide?.reference ?? '' }
+    : a.poster ? { headline: a.poster.headline, body: a.poster.quote, reference: undefined } : a.social_post ? { headline: a.social_post.headline, body: a.social_post.body, reference: a.social_post.reference } : null
+  const dirty = !!(texts && saved && (texts.headline !== saved.headline || texts.body !== saved.body || (texts.reference ?? '') !== (saved.reference ?? '')))
+  const sig = JSON.stringify(texts)
+  useEffect(() => {
+    if (!canDraw || !dirty || !texts) { setDraft((d) => (d.url ? (URL.revokeObjectURL(d.url), { url: '', busy: false, err: '' }) : d)); return }
+    let dead = false
+    const h = setTimeout(async () => {
+      setDraft((d) => ({ ...d, busy: true, err: '' }))
+      try {
+        const r = await fetch(`/api/assets/${id}/draw-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(texts) })
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText)
+        const url = URL.createObjectURL(await r.blob())
+        if (dead) { URL.revokeObjectURL(url); return }
+        setDraft((d) => { if (d.url) URL.revokeObjectURL(d.url); return { url, busy: false, err: '' } })
+      } catch (e: any) { if (!dead) setDraft((d) => ({ ...d, busy: false, err: String(e?.message || e) })) }
+    }, 900)
+    return () => { dead = true; clearTimeout(h) }
+  }, [sig, dirty, canDraw, id]) // eslint-disable-line
+  const redraw = (layout?: string) => run('redraw', async () => { setData(await api.post<Detail>(`/api/assets/${id}/redraw`, { layout })) }, 'Redrawn as a new version')
 
   return (
     <Modal title={a ? `${KIND_LABEL[a.kind] || label(a.kind)} · ${a.slot || ''}` : 'Asset'} onClose={onClose} width="max-w-5xl">
@@ -60,14 +91,35 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
           <div className="space-y-3">
             <div className="rounded-2xl overflow-hidden bg-black/50 flex items-center justify-center border border-line/70">
               {a.has_file && (isReel || a.kind === 'translation_video') ? (
-                <video key={`${a.id}-${a.version}`} controls preload="metadata" poster={a.has_preview ? fileUrl.preview(a.id, a.version) : undefined}
-                  src={`${fileUrl.asset(a.id)}${`?v=${a.version}`}`} className={`w-full ${isReel ? 'max-h-[68vh]' : 'max-h-[50vh]'}`} />
-              ) : a.has_file && isGraphic ? (
-                <img src={`${fileUrl.asset(a.id)}?v=${a.version}`} alt={a.title} className="w-full max-h-[68vh] object-contain" />
+                <video key={`${a.id}-${a.version}-${fmt ?? 'main'}`} controls preload="metadata" poster={a.has_preview && !fmt ? fileUrl.preview(a.id, a.version) : undefined}
+                  src={fmt ? fileUrl.variant(a.id, fmt, a.version) : `${fileUrl.asset(a.id)}${`?v=${a.version}`}`} className={`w-full ${isReel ? 'max-h-[68vh]' : 'max-h-[50vh]'}`} />
+              ) : a.has_file && (isGraphic || isPlainImage) ? (
+                <div className="relative w-full">
+                  <img src={draft.url || `${fileUrl.asset(a.id)}?v=${a.version}`} alt={a.title} className="w-full max-h-[68vh] object-contain" />
+                  {canDraw && (draft.busy || draft.url || draft.err) && (
+                    <span className={`absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs border ${draft.err ? 'bg-danger/20 border-danger/40 text-danger' : 'bg-black/70 border-line text-ink'}`}>
+                      {draft.err ? `Preview failed: ${draft.err}` : draft.busy ? 'Drawing preview…' : 'Preview - not saved yet'}</span>
+                  )}
+                </div>
               ) : a.has_file && a.kind === 'audio' ? <audio controls src={fileUrl.asset(a.id)} className="w-full m-6" />
               : text !== null ? <pre className="text-xs p-4 w-full max-h-[60vh] overflow-auto whitespace-pre-wrap text-muted">{text}</pre>
               : <p className="p-10 text-sm text-muted">{a.has_file ? 'No preview for this file type.' : 'The file is missing on disk.'}</p>}
             </div>
+            {isReel && a.meta?.variants && Object.keys(a.meta.variants).length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-muted">Format</span>
+                {[a.meta.format ?? '9:16', ...Object.keys(a.meta.variants)].map((f: string) => {
+                  const on = (fmt ?? a.meta.format ?? '9:16') === f
+                  return <button key={f} className={`rounded-md border px-2 py-0.5 ${on ? 'border-primary text-ink bg-primary/15' : 'border-line text-muted hover:text-ink'}`}
+                    onClick={() => setFmt(f === (a.meta.format ?? '9:16') ? null : f)}>{f}</button>
+                })}
+                <a className="text-accent hover:underline ml-1" href={fileUrl.variant(a.id, fmt ?? a.meta.format ?? 'main', a.version, true)}>Download this format</a>
+              </div>
+            )}
+            {isReel && a.meta?.reframe && a.meta.reframe.mode && (
+              <p className="text-xs text-muted">{a.meta.reframe.mode === 'crop' ? `Follows the speaker (${a.meta.reframe.backend}; face in ${Math.round((a.meta.reframe.faces ?? 0) * 100)}% of frames${a.meta.reframe.blur_seconds ? `, ${a.meta.reframe.blur_seconds}s blur fill where no face` : ''})`
+                : a.meta.reframe.mode === 'blur' ? 'Whole frame over a blurred background (no face found)' : a.meta.reframe.mode === 'center' ? 'Centre crop' : 'Original shape'}</p>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
               <StatusBadge status={a.status} /> <span>v{a.version}</span>
               {a.reel && <span>{fmtDur(a.reel.start)} → {fmtDur(a.reel.end)} ({fmtDur(a.reel.end - a.reel.start)})</span>}
@@ -90,7 +142,11 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
             </div>
 
             {tab === 'edit' ? (<>
-              <Field label="Title"><input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
+              <Field label={isSlide ? 'Headline (on image)' : 'Title'}><input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
+              {isSlide && (<>
+                <Field label="Message (on image)"><textarea className="input" rows={3} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
+                <Field label="Reference" hint="Shown under the message. Only keep a reference the speaker actually cited."><input className="input" value={sub.reference || ''} onChange={(e) => setSub({ ...sub, reference: e.target.value })} /></Field>
+              </>)}
               {isGraphic && (a.poster ? (<>
                 <Field label="Headline (on image)"><input className="input" value={sub.headline || ''} onChange={(e) => setSub({ ...sub, headline: e.target.value })} /></Field>
                 <Field label="Supporting quote (on image)"><textarea className="input" rows={2} value={sub.quote || ''} onChange={(e) => setSub({ ...sub, quote: e.target.value })} /></Field>
@@ -100,14 +156,27 @@ export default function AssetDetail({ id, onClose, onChanged }: Props) {
                 <Field label="Reference" hint="Only keep a reference the speaker actually cited."><input className="input" value={sub.reference || ''} onChange={(e) => setSub({ ...sub, reference: e.target.value })} /></Field>
               </>))}
               <Field label="Caption"><textarea className="input" rows={3} value={f.caption} onChange={(e) => setF({ ...f, caption: e.target.value })} /></Field>
-              <Field label="Description"><textarea className="input" rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
+              {!isSlide && <Field label="Description"><textarea className="input" rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>}
               <Field label="Hashtags" hint="Separate with spaces"><input className="input" value={f.hashtags} onChange={(e) => setF({ ...f, hashtags: e.target.value })} /></Field>
               <div className="flex flex-wrap gap-2">
                 <button className="btn-primary" onClick={save} disabled={busy === 'save'}>{busy === 'save' ? <Spinner /> : <Save size={15} />}Save changes</button>
+                {isSlide && <button className="btn-ghost" disabled={busy === 'redraw'} onClick={() => redraw()}><RefreshCw size={15} />Redraw</button>}
+                {isSlide && <select className="input !w-auto" value="" onChange={(e) => e.target.value && redraw(e.target.value)} aria-label="Change layout">
+                  <option value="">Change layout…</option><option value="classic">Classic</option><option value="band">Band</option><option value="centered">Centered</option></select>}
                 {isGraphic && <button className="btn-ghost" disabled={busy === 'regen'} onClick={() => regenerate({ mode: a.kind === 'social_post' ? 'regenerate' : 'rerender' })}><RefreshCw size={15} />{a.kind === 'social_post' ? 'Regenerate with AI' : 'Redraw'}</button>}
                 {isGraphic && <select className="input !w-auto" value="" onChange={(e) => e.target.value && regenerate({ mode: 'rerender', layout: e.target.value })} aria-label="Change layout">
                   <option value="">Change layout…</option><option value="classic">Classic</option><option value="band">Band</option><option value="centered">Centered</option></select>}
               </div>
+              {(a.kind === 'main_reel' || a.kind === 'short_reel') && a.meta?.message_score != null && (
+                <div className="rounded-xl border border-line/70 p-3 space-y-2">
+                  <p className="text-sm font-medium flex items-center gap-2">Message score <ScoreBadge a={a} />{a.meta?.category && <span className="text-xs rounded-md border border-line px-1.5 py-0.5 text-muted">{a.meta.category}</span>}
+                    {a.meta?.score_source === 'estimated' && <span className="text-xs text-muted font-normal">estimated from the transcript</span>}</p>
+                  {a.description && <p className="text-sm text-muted">{a.description}</p>}
+                  {a.meta?.score_parts && <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted">
+                    {Object.entries(a.meta.score_parts as Record<string, number>).map(([k, v]) => <p key={k} className="flex justify-between"><span>{PART_LABEL[k] ?? k}</span><b className="text-ink">{v}/20</b></p>)}</div>}
+                  {a.meta?.topic && <p className="text-xs text-muted">Asked for a moment about “{a.meta.topic}”: {a.meta.topic_hits > 0 ? 'this clip matches' : 'this clip does not clearly match'}.</p>}
+                </div>
+              )}
               {isReel && (
                 <div className="rounded-xl border border-line/70 p-3 space-y-2">
                   <p className="text-xs text-muted">Trim and re-render (creates a new version; the previous file is kept). Source video is never modified.</p>

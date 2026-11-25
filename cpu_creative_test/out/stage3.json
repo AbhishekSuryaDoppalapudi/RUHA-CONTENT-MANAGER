@@ -1,0 +1,99 @@
+{
+  "normalized_hooks": {
+    "main": [
+      "Strength"
+    ],
+    "short": [
+      "Faith",
+      "Strength"
+    ],
+    "poster": "God’s Strength Through Our Weakness",
+    "posts": [
+      "Let Go of Pretense: Embrace Your True Self",
+      "Honest Prayer: The Key to His Power"
+    ]
+  },
+  "one_word_hook_on_idea_hooks": {
+    "Embrace your weakness, not hide it.": "Strength",
+    "Surrendering isn't giving up, it's trusting.": "Faith",
+    "God’s strength is found in our weaknesses.": "Strength",
+    "Pray with honesty, not just for show.": "Pray",
+    "When your strength fades, His shines brighter.": "Strength",
+    "Weakness is the gateway to His power.": "Strength",
+    "Your Weakness Is Not the End of Your Story": "Strength",
+    "When Your Strength Ends, His Begins": "Strength"
+  },
+  "legacy_perf": {
+    "seconds": 23.1,
+    "free_gb_start": 3.17,
+    "free_gb_min": 2.85,
+    "python_peak_rss_gb": 0.16,
+    "cpu_avg_pct": 60.0,
+    "cpu_max_pct": 99.6,
+    "aborted_for_low_ram": false
+  },
+  "jobs": [
+    [
+      "poster_generation",
+      "completed",
+      ""
+    ],
+    [
+      "social_post_generation",
+      "completed",
+      ""
+    ]
+  ],
+  "assets": [
+    {
+      "kind": "poster",
+      "slot": "poster",
+      "title": "God’s Strength Through Our Weakness",
+      "caption": "",
+      "file": "C:\\Users\\Abhishek Chazak\\OneDrive\\Documents\\AI\\RUHA-CONTENT-MANAGER\\cpu_creative_test\\data\\projects\\00001-cpu-test-recognize-your-weakness\\posters\\poster_v1.png",
+      "meta": {
+        "layout": "classic",
+        "template_id": 1,
+        "size": [
+          1080,
+          1350
+        ],
+        "visual_theme": "strength"
+      }
+    },
+    {
+      "kind": "social_post",
+      "slot": "social_1",
+      "title": "Let Go of Pretense: Embrace Your True Self",
+      "caption": "God doesn’t need us to pretend. Let your true self shine, and see His strength in you.",
+      "file": "C:\\Users\\Abhishek Chazak\\OneDrive\\Documents\\AI\\RUHA-CONTENT-MANAGER\\cpu_creative_test\\data\\projects\\00001-cpu-test-recognize-your-weakness\\social\\social_1_v1.png",
+      "meta": {
+        "layout": "classic",
+        "template_id": 2,
+        "size": [
+          1080,
+          1350
+        ],
+        "similar_to": [],
+        "visual_theme": "strength"
+      }
+    },
+    {
+      "kind": "social_post",
+      "slot": "social_2",
+      "title": "Honest Prayer: The Key to His Power",
+      "caption": "Pray with sincerity, and watch His power transform your life.",
+      "file": "C:\\Users\\Abhishek Chazak\\OneDrive\\Documents\\AI\\RUHA-CONTENT-MANAGER\\cpu_creative_test\\data\\projects\\00001-cpu-test-recognize-your-weakness\\social\\social_2_v1.png",
+      "meta": {
+        "layout": "band",
+        "template_id": 3,
+        "size": [
+          1080,
+          1350
+        ],
+        "similar_to": [],
+        "visual_theme": "strength"
+      }
+    }
+  ]
+}

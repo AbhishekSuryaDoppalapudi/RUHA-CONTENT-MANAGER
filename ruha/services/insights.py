@@ -70,7 +70,7 @@ def dashboard(app) -> dict:
             "generated": [{"id": a.id, "kind": a.kind, "title": a.title, "project_id": a.project_id,
                            "project": names.get(a.project_id), "at": a.created_at.isoformat()}
                           for a in s.query(GeneratedAsset).filter(GeneratedAsset.kind.in_(
-                              ["main_reel", "short_reel", "image_reel", "poster", "social_post"])).order_by(GeneratedAsset.id.desc()).limit(8)],
+                              ["main_reel", "short_reel", "image_reel", "poster", "social_post", "creative"])).order_by(GeneratedAsset.id.desc()).limit(8)],
             "approvals": [{"asset_id": ap.asset_id, "action": ap.action, "reason": ap.reason, "at": ap.created_at.isoformat()}
                           for ap in s.query(Approval).filter(Approval.action != "comment").order_by(Approval.id.desc()).limit(6)],
             "failed_jobs": [{"id": j.id, "type": j.job_type, "project_id": j.project_id, "error": j.error,
@@ -78,14 +78,14 @@ def dashboard(app) -> dict:
                             for j in s.query(ProcessingJob).filter_by(status="failed").order_by(ProcessingJob.id.desc()).limit(6)],
         }
         review = dict(s.query(GeneratedAsset.status, func.count()).filter(GeneratedAsset.kind.in_(
-            ["main_reel", "short_reel", "image_reel", "poster", "social_post"])).group_by(GeneratedAsset.status).all())
+            ["main_reel", "short_reel", "image_reel", "poster", "social_post", "creative"])).group_by(GeneratedAsset.status).all())
     return {"metrics": metrics, "processing": processing, "recent": recent, "review_queue": review}
 
 
 def analytics(app, days: int = 90) -> dict:
     since = utcnow() - timedelta(days=days)
     with app.db.session() as s:
-        review_kinds = ["main_reel", "short_reel", "image_reel", "poster", "social_post"]
+        review_kinds = ["main_reel", "short_reel", "image_reel", "poster", "social_post", "creative"]
         base = s.query(GeneratedAsset).filter(GeneratedAsset.kind.in_(review_kinds))
         status = Counter(a.status for a in base)
         total = sum(status.values())

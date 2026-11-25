@@ -6,7 +6,8 @@
     "scripts": {
         "dev": "vite",
         "build": "tsc --noEmit && vite build",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "node --experimental-strip-types --no-warnings --test tests/reelLogic.test.ts"
     },
     "dependencies": {
         "@fontsource-variable/inter": "^5.1.0",

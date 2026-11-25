@@ -17,7 +17,7 @@ export default function Review() {
   const projects = useApi(() => api.get<{ items: { id: number; name: string }[] }>('/api/projects?limit=200'), [])
   const counts = useApi(() => api.get<{ review_queue: Record<string, number> }>('/api/dashboard'), [], 8000)
   const { data, error, loading, reload } = useApi(() => api.get<{ items: Asset[] }>(`/api/library${qs({ status: tab, project_id: project, limit: 300, sort: 'created', order: 'desc' })}`), [tab, project])
-  const items = (data?.items ?? []).filter((a) => ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post'].includes(a.kind)).filter((a) => !kind || a.kind === kind)
+  const items = (data?.items ?? []).filter((a) => ['main_reel', 'short_reel', 'image_reel', 'poster', 'social_post', 'creative'].includes(a.kind)).filter((a) => !kind || a.kind === kind)
   const q = counts.data?.review_queue ?? {}
   return (
     <>
@@ -25,7 +25,7 @@ export default function Review() {
       <Tabs value={tab} onChange={setTab} tabs={TABS.map(([id, l]) => ({ id, label: l, count: q[id] ?? 0 }))} />
       <div className="flex gap-2 mt-4 items-center flex-wrap"><label className="text-xs text-muted" htmlFor="rv-project">Project</label>
         <select id="rv-project" className="input !w-auto min-w-[14rem]" value={project} onChange={(e) => setProject(e.target.value)}><option value="">All projects</option>{(projects.data?.items ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-      <div className="flex gap-1.5 my-4 flex-wrap">{[['', 'All types'], ['main_reel', 'Main reels'], ['short_reel', 'Short reels'], ['image_reel', 'Image reels'], ['poster', 'Posters'], ['social_post', 'Social posts']].map(([v, l]) => (
+      <div className="flex gap-1.5 my-4 flex-wrap">{[['', 'All types'], ['main_reel', 'Main reels'], ['short_reel', 'Short reels'], ['image_reel', 'Image reels'], ['poster', 'Posters'], ['creative', 'Creatives'], ['social_post', 'Social posts']].map(([v, l]) => (
         <button key={v} onClick={() => setKind(v)} className={`chip !px-3 !py-1 ${kind === v ? 'bg-primary/25 border-primary/60' : 'border-line text-muted hover:text-ink'}`}>{l}</button>))}</div>
       {loading && !data ? <Loading rows={3} /> : error && !data ? <ErrorBox error={error} retry={reload} /> : items.length === 0 ? (
         <Empty icon={<CheckCircle2 size={36} />} title={tab === 'draft' ? 'Nothing waiting for review' : 'Nothing here'} hint={tab === 'draft' ? 'Newly generated and edited assets appear here for approval.' : undefined} />

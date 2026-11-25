@@ -50,6 +50,23 @@ class ConfigStore:
                     row.value_json = json.dumps(v)
         return self.all()
 
+    OLD_DEFAULTS = {"whisper.model": ("small", "large-v3-turbo"), "llm.model": ("qwen2.5:3b", "qwen2.5:7b")}
+
+    def migrate_model_defaults(self) -> list:
+        """Once per database: a stored old default (whisper 'small', qwen2.5:3b) becomes the new default
+        (large-v3-turbo / qwen2.5:7b). Anything you chose yourself is left alone, and it runs only once."""
+        changed = []
+        with self.db.session() as s:
+            if s.get(ModelSetting, "app.model_defaults_v2") is not None:
+                return changed
+            for key, (old, new) in self.OLD_DEFAULTS.items():
+                row = s.get(ModelSetting, key)
+                if row is not None and json.loads(row.value_json) == old:
+                    row.value_json = json.dumps(new)
+                    changed.append(key)
+            s.add(ModelSetting(key="app.model_defaults_v2", category="app", value_json=json.dumps(True)))
+        return changed
+
     def by_category(self) -> dict:
         vals = self.all()
         out: dict = {}
@@ -65,6 +82,7 @@ class Services:
     llm: object = field(default_factory=OllamaLLM)
     embedder_factory: object = make_embedder
     translator: object = None  # set in AppContext (needs settings)
+    images: object = field(default_factory=lambda: __import__("ruha.creative.backends", fromlist=["x"]).ImageService())
     imagegen: object = field(default_factory=lambda: __import__("ruha.ai.imagegen", fromlist=["x"]).DiffusersBackground())
 
 
@@ -94,8 +112,25 @@ class AppContext:
 
     def start(self):
         self.queue.recover_interrupted()
+        try:
+            moved = self.config.migrate_model_defaults()
+            if moved:
+                logging.getLogger("ruha").info("Model defaults updated once: %s", ", ".join(moved))
+        except Exception:
+            logging.getLogger("ruha").exception("model default migration failed")
         if self.settings.start_worker:
+            try:                                          # empty leftover project folders (no files) are safe to remove
+                from ruha.services import projects as project_svc
+                with self.db.session() as s:
+                    res = project_svc.cleanup_orphan_workspaces(self, s, dry_run=False, include_files=False)
+                if res["removed"]:
+                    logging.getLogger("ruha").info("Removed %d empty orphan project folder(s): %s", len(res["removed"]),
+                                                   ", ".join(o["name"] for o in res["removed"]))
+            except Exception:
+                logging.getLogger("ruha").exception("orphan folder cleanup failed")
             self.queue.start()
+            from ruha.services import system as sysinfo
+            sysinfo.probe_cache(self).warm()            # first status call already has the slow probes
 
     def stop(self):
         self.queue.stop()

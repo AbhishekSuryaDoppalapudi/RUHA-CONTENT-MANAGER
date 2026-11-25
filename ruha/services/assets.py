@@ -136,10 +136,30 @@ def review(ctx, s, asset: GeneratedAsset, action: str, reason: str = "", comment
     return ap
 
 
+TRANSLATABLE_KINDS = ("main_reel", "short_reel", "video", "image_reel", "edited_reel")
+
+
+def reel_source(s, project_id: int, asset_id) -> tuple:
+    """(file path, title) of a finished reel/video that a translation or dub job should use instead of the sermon.
+    ValueError (a permanent error, not retried) when it is not a usable reel of this project."""
+    try:
+        a = s.get(GeneratedAsset, int(asset_id))
+    except (TypeError, ValueError):
+        a = None
+    if a is None or a.project_id != project_id:
+        raise ValueError("That reel does not belong to this project.")
+    if a.kind not in TRANSLATABLE_KINDS:
+        raise ValueError("Only a reel or video can be translated or dubbed this way.")
+    if not a.file_path or not Path(a.file_path).exists():
+        raise ValueError("That reel has no video file yet (render it first).")
+    return Path(a.file_path), a.title or a.slot or f"asset {a.id}"
+
+
 def delete_files(ctx, asset: GeneratedAsset) -> int:
     """Remove the asset's files (current + archived versions) from disk. Returns files removed."""
     removed = 0
     paths = {asset.file_path, asset.preview_path} | {v.file_path for v in asset.versions}
+    paths |= {x.get("file") for x in (asset.meta.get("variants") or {}).values() if isinstance(x, dict)}   # other formats
     for p in paths:
         if not p:
             continue
@@ -153,10 +173,20 @@ def delete_files(ctx, asset: GeneratedAsset) -> int:
     return removed
 
 
+def public_meta(meta: dict) -> dict:
+    """The asset's meta for the API: the other-format files are listed by format with their size, never by server path."""
+    meta = dict(meta or {})
+    if isinstance(meta.get("variants"), dict):
+        meta["variants"] = {fid: {**{k: v for k, v in var.items() if k != "file"},
+                                  "has_file": bool(var.get("file") and Path(var["file"]).exists())}
+                            for fid, var in meta["variants"].items() if isinstance(var, dict)}
+    return meta
+
+
 def serialize(a: GeneratedAsset, s=None) -> dict:
     d = {"id": a.id, "project_id": a.project_id, "kind": a.kind, "slot": a.slot, "title": a.title,
          "description": a.description, "caption": a.caption, "hashtags": a.hashtags, "mime": a.mime,
-         "size_bytes": a.size_bytes, "status": a.status, "version": a.version, "meta": a.meta,
+         "size_bytes": a.size_bytes, "status": a.status, "version": a.version, "meta": public_meta(a.meta),
          "has_file": bool(a.file_path and Path(a.file_path).exists()),
          "has_preview": bool(a.preview_path and Path(a.preview_path).exists()),
          "created_at": a.created_at.isoformat(), "updated_at": a.updated_at.isoformat(),

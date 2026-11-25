@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -69,6 +70,73 @@ def serve_brand_file(slot: str, ctx=Depends(app_ctx)):
     if slot not in b["files"]:
         raise HTTPException(404, "Unknown slot")
     return file_response(ctx, b["files"][slot])
+
+
+# ------------------------- per-project brand kit (logo + text templates) -------------------------
+class KitTextIn(BaseModel):
+    kind: str
+    text: str
+    name: str = ""
+
+
+def _project_ws(ctx, pid: int) -> Path:
+    with ctx.db.session() as s:
+        return Path(get_or_404(s, Project, pid, "Project").workspace_dir)
+
+
+def _kit(fn, *a):
+    try:
+        return fn(*a)
+    except brand_svc.BrandError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/projects/{pid}/brand-kit")
+def get_kit(pid: int, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return brand_svc.public_kit(brand_svc.get_kit(ctx, pid))
+
+
+@router.post("/projects/{pid}/brand-kit/logo")
+def upload_kit_logo(pid: int, file: UploadFile = File(...), ctx=Depends(app_ctx)):
+    ws = _project_ws(ctx, pid)
+    return _kit(brand_svc.save_project_logo, ctx, pid, ws, file.file, file.filename or "logo")
+
+
+@router.delete("/projects/{pid}/brand-kit/logo")
+def delete_kit_logo(pid: int, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return brand_svc.clear_project_logo(ctx, pid)
+
+
+@router.get("/projects/{pid}/brand-kit/logo")
+def serve_kit_logo(pid: int, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return file_response(ctx, brand_svc.get_kit(ctx, pid)["logo"])
+
+
+@router.post("/projects/{pid}/brand-kit/texts", status_code=201)
+def add_kit_text(pid: int, body: KitTextIn, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return _kit(brand_svc.add_text, ctx, pid, body.kind, body.name, body.text)
+
+
+@router.post("/projects/{pid}/brand-kit/texts/upload")
+def upload_kit_texts(pid: int, kind: str = "caption", file: UploadFile = File(...), ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return _kit(brand_svc.import_texts, ctx, pid, kind, file.file, file.filename or "texts.txt")
+
+
+@router.put("/projects/{pid}/brand-kit/texts/{tid}")
+def update_kit_text(pid: int, tid: str, body: KitTextIn, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return _kit(brand_svc.update_text, ctx, pid, tid, body.kind, body.name, body.text)
+
+
+@router.delete("/projects/{pid}/brand-kit/texts/{tid}")
+def delete_kit_text(pid: int, tid: str, ctx=Depends(app_ctx)):
+    _project_ws(ctx, pid)
+    return brand_svc.delete_text(ctx, pid, tid)
 
 
 @router.get("/templates")

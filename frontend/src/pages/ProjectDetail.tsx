@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
+import { Film, Image as ImageIcon, Languages, Play, Replace, RotateCw, Save, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 import { api, Asset, fileUrl, Job, Project } from '../api'
 import { Empty, ErrorBox, Field, Loading, PageHeader, ProgressBar, Spinner, StatusBadge, Tabs, ago, fmtBytes, fmtDate, fmtDur, label, useApi, useConfirm, useDebounced, useToast, PROJECT_STATUS_OPTIONS } from '../ui'
-import AssetCard from '../components/AssetCard'
+import AssetCard, { reelScore } from '../components/AssetCard'
+import BrandKit from '../components/BrandKit'
 import AssetDetail from '../components/AssetDetail'
 import { ImageReelModal, RunJobModal } from '../components/Dialogs'
 
@@ -27,6 +28,14 @@ export default function ProjectDetail() {
   if (!p) return null
   const busy = p.status === 'processing'
 
+  const deleteAssets = async (items: Asset[], what: string) => {
+    if (!(await confirm({ title: `Delete ${what}?`, body: 'The files and all their versions are removed from disk. This cannot be undone.', confirm: 'Delete', danger: true }))) return
+    try {
+      for (const a of items) await api.del(`/api/assets/${a.id}`)
+      toast.ok(items.length === 1 ? 'Deleted' : `Deleted ${items.length} items`)
+    } catch (e) { toast.err(e) } finally { reloadAssets(); reload() }
+  }
+
   const upload = async (f: File) => {
     const form = new FormData(); form.append('file', f); form.append('replace', String(replace))
     setPct(0)
@@ -39,8 +48,12 @@ export default function ProjectDetail() {
   }
   const act = async (fn: () => Promise<any>, ok: string) => { try { await fn(); toast.ok(ok); reload(); reloadAssets() } catch (e) { toast.err(e) } }
   const startEdit = () => setEdit({ name: p.name, description: p.description, tags: p.tags.join(', '), content_type: p.content_type })
-  const group = (kinds: string[]) => (assets ?? []).filter((a) => kinds.includes(a.kind))
-  const sections: [string, string[]][] = [['Main reels', ['main_reel']], ['Short reels', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']],
+  // reels are listed best first (by Message score); everything else keeps its order
+  const group = (kinds: string[]) => {
+    const list = (assets ?? []).filter((a) => kinds.includes(a.kind))
+    return kinds.some((k) => k === 'main_reel' || k === 'short_reel') ? [...list].sort((x, y) => reelScore(y) - reelScore(x) || x.id - y.id) : list
+  }
+  const sections: [string, string[]][] = [['Main reel', ['main_reel']], ['Short reels - best first', ['short_reel']], ['Reels from images', ['image_reel']], ['Highlight poster', ['poster']], ['Encouragement posts', ['social_post']], ['Carousel (swipe through)', ['carousel']], ['Thumbnails (1280×720)', ['thumbnail']],
     ['Translations & dubbing', ['translation_video', 'translation_subtitle', 'audio']], ['Transcripts & subtitles', ['transcript', 'subtitle', 'caption']]]
   const total = assets?.length ?? 0
 
@@ -52,11 +65,12 @@ export default function ProjectDetail() {
           <button className="btn-primary" disabled={!p.video || busy} onClick={() => act(() => api.post(`/api/projects/${pid}/process`, {}), 'Pipeline queued')}><Sparkles size={16} />{busy ? 'Processing…' : total ? 'Run pipeline again' : 'Generate content'}</button>
           <button className="btn-ghost" disabled={!p.video} onClick={() => setModal(true)}><Languages size={16} />Translate / dub</button>
           <button className="btn-ghost" onClick={() => setImgModal(true)}><ImageIcon size={16} />Reel from images</button>
+          <Link className="btn-ghost" to={`/projects/${pid}/editor`}><Film size={16} />Reel Editor</Link>
           <Link className="btn-ghost" to={`/review?project=${pid}`}>Review this project</Link>
           <Link className="btn-ghost" to={`/library?project=${pid}`}>Open in library</Link>
         </>} />
       <Tabs value={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'assets', label: 'Generated content', count: total }, { id: 'transcript', label: 'Transcript' },
-        { id: 'jobs', label: 'Jobs', count: p.jobs?.length }, { id: 'history', label: 'History' }]} />
+        { id: 'brand', label: 'Logo & texts' }, { id: 'jobs', label: 'Jobs', count: p.jobs?.length }, { id: 'history', label: 'History' }]} />
       <div className="mt-5">
         {tab === 'overview' && (
           <div className="grid lg:grid-cols-[3fr_2fr] gap-5">
@@ -114,10 +128,12 @@ export default function ProjectDetail() {
           <Empty icon={<Sparkles size={34} />} title="Nothing generated yet" hint={p.video ? 'Run the pipeline to create reels, a poster and social posts from this video.' : 'Upload a video first.'}
             action={p.video && <button className="btn-primary" onClick={() => act(() => api.post(`/api/projects/${pid}/process`, {}), 'Pipeline queued')}>Generate content</button>} />
         ) : sections.map(([title, kinds]) => { const list = group(kinds); return list.length ? (
-          <section key={title} className="mb-8"><h2 className="font-display text-lg mb-3">{title} <span className="text-sm text-muted">({list.length})</span></h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">{list.map((a) => <AssetCard key={a.id} a={{ ...a, project_name: undefined }} onOpen={() => setOpen(a.id)} />)}</div></section>) : null })) }
+          <section key={title} className="mb-8"><div className="flex items-center mb-3"><h2 className="font-display text-lg">{title} <span className="text-sm text-muted">({list.length})</span></h2>
+            <button className="btn-ghost !py-1 !px-2 text-xs ml-auto text-muted hover:text-danger" onClick={() => deleteAssets(list, `all ${list.length} in “${title}”`)}><Trash2 size={13} />Delete all</button></div>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">{list.map((a) => <AssetCard key={a.id} a={{ ...a, project_name: undefined }} onOpen={() => setOpen(a.id)} onDelete={() => deleteAssets([a], `“${a.title || 'this item'}”`)} />)}</div></section>) : null })) }
 
         {tab === 'transcript' && <TranscriptTab pid={pid} />}
+        {tab === 'brand' && <BrandKit pid={pid} />}
         {tab === 'jobs' && ((p.jobs?.length ?? 0) === 0 ? <Empty title="No jobs yet" hint="Jobs appear here when you generate content." /> : <div className="space-y-2">{p.jobs!.map((j) => <JobRow key={j.id} j={j} retry={() => act(() => api.post(`/api/jobs/${j.id}/retry`), 'Retry queued')} cancel={() => act(() => api.post(`/api/jobs/${j.id}/cancel`), 'Cancelled')} />)}</div>)}
         {tab === 'history' && <HistoryTab pid={pid} />}
       </div>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,9 @@ class FakeLLM:
 
     def __init__(self):
         self.calls = []
+        self.prompts = []              # the full text of every prompt sent
+        self.copy_calls = 0            # captions written one clip at a time
+        self.copy_duplicate_first = False
         self.fail = False
         self.post_variant = 0
 
@@ -60,12 +64,39 @@ class FakeLLM:
 
     def generate_json(self, prompt, cfg):
         self.calls.append(prompt[:60])
+        self.prompts.append(prompt)
         if self.fail:
             raise RuntimeError("Ollama unreachable (simulated)")
         if "Write 1 NEW" in prompt or "Write 2 NEW" in prompt:
             self.post_variant += 1
             n = self.post_variant
             return {"posts": [{"hook": f"Fresh hope variant {n}", "caption": f"caption variant {n}", "reference": ""}]}
+        if prompt.startswith("You are the creative director"):
+            return {"message": "God's grace is a free gift", "emotional_theme": "grace", "audience": "people who feel they must earn love",
+                    "visual_metaphors": [{"subject": "an open hand receiving light", "environment": "a quiet field at golden hour"},
+                                         {"subject": "a wooden door ajar with warm light", "environment": "a stone path"},
+                                         {"subject": "a table set with bread and a lamp", "environment": "a simple room at dusk"}],
+                    "headlines": ["Grace is not earned", "Why would God give it free?", "Receive what you cannot repay Romans 8:28"],
+                    "supporting_text": "A free gift for every person John 3:16",
+                    "creative_direction": "Warm, reverent, hopeful"}
+        if prompt.startswith("You write the opening hook"):
+            q = "hook as a question" in prompt          # the producer's comment, not the prompt's own rules
+            return {"hook": "Is grace the free gift?" if q else "Grace is the free gift", "closing": "Keep believing",
+                    "caption": "A word on faith", "hashtags": ["faith"], "reason": "typed by the producer"}
+        if prompt.startswith("You write the social media caption for ONE sermon reel"):
+            self.copy_calls += 1
+            tail = prompt.split("THIS reel's own transcript", 1)[-1]
+            seg = re.findall(r"Segment (\d+)", tail)
+            tag = seg[0] if seg else str(self.copy_calls)
+            n = self.copy_calls
+            if self.copy_duplicate_first and n == 1:                 # the first answer for the first clip repeats the planner's wording
+                return {"caption": "Free grace #1 for everyone", "hashtags": ["#grace"]}
+            themes = ["mercy rises over every chain", "light returns after the long night", "hope wakes the weary heart",
+                      "love stays when everything leaves", "peace settles on a restless crowd", "joy returns to the broken places",
+                      "courage grows quietly in secret"]
+            return {"caption": f"{themes[(n - 1) % len(themes)]} (segment {tag})", "hashtags": ["#faith", f"#part{tag}"]}
+        if prompt.startswith("Write the text for ONE sermon poster"):
+            return {"headline": "Weakness becomes strength", "verse": "", "verse_text": ""}
         if prompt.startswith("Translate each of these subtitle lines"):
             import json as _j
             lines = _j.loads(prompt.strip().splitlines()[-1])
@@ -75,12 +106,29 @@ class FakeLLM:
             "visual_theme": "grace",
             "themes": ["grace", "gift"], "key_points": ["grace is free"],
             "quotes": ["grace is the free gift of God number 3 for every person", "this sentence was never spoken"],
+            # scored candidates (more than needed, some overlapping): the best non-overlapping ones are kept
             "main_reels": [
-                {"start": 1, "end": 46, "hook": "Grace is free", "closing": "Receive it today", "reason": "opening",
-                 "caption": "Free grace #1", "hashtags": ["#grace"]}],
+                {"start": 1, "end": 70, "hook": "Grace is free", "closing": "Receive it today", "reason": "strong opening",
+                 "caption": "Free grace #1", "hashtags": ["#grace"], "category": "Teaching", "key_words": ["grace", "gift"],
+                 "score": {"opening": 18, "idea": 17, "quotable": 15, "emotion": 14, "standalone": 16}},
+                {"start": 100, "end": 170, "hook": "Weaker main", "reason": "rambling", "category": "Story",
+                 "score": {"opening": 8, "idea": 9, "quotable": 5, "emotion": 6, "standalone": 7}}],
             "short_reels": [
-                {"start": 162, "end": 182, "hook": "Short one", "reason": "s1", "caption": "Short #1"},
-                {"start": 183, "end": 200, "hook": "Short two", "reason": "s2", "caption": "Short #2"}],
+                {"start": 75, "end": 110, "hook": "Short one", "reason": "complete idea", "caption": "Short #1",
+                 "key_words": ["free gift", "invented", "the", "person"],
+                 "category": "Encouragement", "score": {"opening": 17, "idea": 18, "quotable": 14, "emotion": 17, "standalone": 18}},
+                {"start": 80, "end": 115, "hook": "Overlaps the best", "reason": "similar", "caption": "Short #1b",
+                 "category": "Teaching", "score": {"opening": 15, "idea": 15, "quotable": 10, "emotion": 12, "standalone": 14}},
+                {"start": 120, "end": 155, "hook": "Short two", "reason": "good", "caption": "Short #2",
+                 "category": "Story", "score": {"opening": 12, "idea": 14, "quotable": 9, "emotion": 13, "standalone": 13}},
+                {"start": 165, "end": 200, "hook": "Short three", "reason": "ok", "caption": "Short #3",
+                 "category": "Prayer", "score": {"opening": 10, "idea": 12, "quotable": 8, "emotion": 10, "standalone": 12}}],
+            "carousel": [
+                {"title": "Grace is a gift", "text": "Grace is the free gift of God"},
+                {"title": "For every person", "text": "Every person receives this gift number"},
+                {"title": "Nothing to earn", "text": "God gives the gift without any number to earn"},
+                {"title": "Received by faith", "text": "The person who believes receives grace"},
+                {"title": "Live it out", "text": "Share the free gift with every other person"}],
             "poster": {"hook": "Grace Is Free", "verse": "Segment 3",
                        "verse_text": "grace is the free gift of God number 3 for every person", "theme": "Grace"},
             "encouragement_posts": [
@@ -112,18 +160,56 @@ class FakeImageGen:
         return out
 
 
+class FakeImages:
+    """Stands in for Stable Diffusion in tests. Draws a different synthetic picture per seed - clearly NOT AI artwork."""
+    name = "fake-images"
+
+    def __init__(self):
+        self.calls = []
+        self.unloads = 0
+        self.up = True
+
+    def status(self, cfg):
+        return {"available": self.up, "reason": "" if self.up else "No image-generation model is available. (test)",
+                "hardware": {"gpu": None, "ram": {"total_gb": 16, "free_gb": 8}, "recommendation": {"model": None}},
+                "backend": "fake", "model": "fake-sd"}
+
+    def generate(self, prompt, negative, size, seed, cfg, progress=None):
+        from ruha.creative.backends import ImageBackendError
+        if not self.up:
+            raise ImageBackendError("No image-generation model is available. (test)")
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFilter
+        self.calls.append({"prompt": prompt, "negative": negative, "size": tuple(size), "seed": seed})
+        rng = np.random.default_rng(seed)
+        w, h = size
+        top, bot = rng.integers(20, 200, 3), rng.integers(20, 200, 3)
+        y = np.linspace(0, 1, h)[:, None, None]
+        arr = (top * (1 - y) + bot * y) * np.ones((1, w, 1))
+        im = Image.fromarray(arr.astype("uint8"))
+        d = ImageDraw.Draw(im)
+        for _ in range(7):
+            x0, y0 = int(rng.integers(0, w)), int(rng.integers(0, h))
+            r = int(rng.integers(w // 10, w // 3))
+            d.ellipse((x0 - r, y0 - r, x0 + r, y0 + r), fill=tuple(int(v) for v in rng.integers(0, 255, 3)))
+        return im.filter(ImageFilter.GaussianBlur(3)), {"backend": "fake", "model": "fake-sd", "model_key": "fake"}
+
+    def unload(self):
+        self.unloads += 1
+
+
 class FakeTranslator:
     def __init__(self):
         self.calls = []
         self.fail = False
 
     def status(self):
-        return {"available": True, "directory": "fake", "python": "fake", "reason": None}
+        return {"available": True, "directory": "fake", "python": "fake", "reason": None, "engine": "shared", "cloning": True}
 
     def translate(self, video_path, out_dir, *, source="Auto-detect", target="Hindi", voice="Female", dub=False,
-                  keep_background=True, burn=False, resolution="Original resolution", progress=None, log=None,
-                  cancel=None):
-        self.calls.append({"target": target, "dub": dub})
+                  keep_background=True, burn=False, resolution="Original resolution", clone=False, source_hint=None,
+                  progress=None, log=None, cancel=None):
+        self.calls.append({"target": target, "dub": dub, "clone": clone, "source_hint": source_hint, "video": str(video_path)})
         if self.fail:
             raise RuntimeError("translator crashed (simulated)")
         out = Path(out_dir)
@@ -155,7 +241,8 @@ def sample_video(tmp_path_factory) -> Path:
 @pytest.fixture()
 def fakes():
     return Services(transcriber=FakeTranscriber(), llm=FakeLLM(), embedder_factory=lambda cfg: HashEmbedder(),
-                    translator=FakeTranslator(), imagegen=FakeImageGen())
+                    translator=FakeTranslator(), imagegen=FakeImageGen(),
+                    images=FakeImages())
 
 
 def build_client(data_dir: Path, fakes: Services) -> TestClient:
@@ -171,7 +258,9 @@ def client(tmp_path, fakes):
     with c:
         ctx = c.app.state.ctx
         ctx.config.set_many({"render.width": 270, "render.height": 480, "render.quality": "draft",
-                             "design.engine": "pillow"})      # the browser renderer has its own tests (slow)
+                             "design.engine": "pillow",       # the browser renderer has its own tests (slow)
+                             "reel.face_tracking": False,     # face tracking decodes and scans frames: it has its own tests
+                             "thumbnail.best_frame": False})  # so does scoring frames for thumbnails
         yield c
 
 

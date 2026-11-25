@@ -66,6 +66,7 @@ export const fileUrl = {
   videoThumb: (id: number) => `/api/videos/${id}/thumbnail`,
   projectThumb: (id: number) => `/api/projects/${id}/thumbnail`,
   version: (id: number, v: number) => `/api/assets/${id}/versions/${v}/file`,
+  variant: (id: number, fmt: string, v?: number, download = false) => `/api/assets/${id}/variants/${encodeURIComponent(fmt)}/file?${download ? 'download=true&' : ''}v=${v ?? 0}`,
 }
 
 // ------------------------------- types ------------------------------------
@@ -92,6 +93,7 @@ export type Asset = {
   last_review?: { action: string; actor: string; reason: string; at: string; version: number }
 }
 export type AssetDetail = Asset & {
+  slide?: { reference: string; label: string }
   versions: { version: number; title: string; caption: string; description: string; hashtags: string[]; status: string; reason: string; created_by: string; created_at: string; has_file: boolean }[]
   reviews: { id: number; action: string; actor: string; reason: string; comment: string; version: number; at: string }[]
 }

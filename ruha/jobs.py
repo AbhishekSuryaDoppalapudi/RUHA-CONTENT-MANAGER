@@ -19,11 +19,30 @@ from ruha.security import redact
 
 log = logging.getLogger("ruha.jobs")
 
-PIPELINE = ["transcription", "reel_generation", "poster_generation", "social_post_generation"]
+PIPELINE = ["transcription", "reel_generation", "poster_generation", "social_post_generation", "carousel_generation",
+            "thumbnail_generation"]
 
 
 class JobCancelled(Exception):
     pass
+
+
+# Errors that go away by themselves (a service that is not up yet, a timeout, a busy GPU, too little free memory right
+# now) are retried automatically; everything else (bad input, missing setup, a bug) fails at once and waits for a person.
+_TEMPORARY_WORDS = ("timed out", "timeout", "out of memory", "cuda error", "temporarily", "connection refused",
+                    "connection reset", "resource busy", "gpu is busy", "too many requests", "service unavailable")
+
+
+def is_temporary(exc: BaseException) -> bool:
+    import requests
+    from ruha.ai.llm import LLMUnavailable
+    from ruha.ai.whisper import ResourceError
+    if isinstance(exc, (LLMUnavailable, ResourceError, TimeoutError, ConnectionError,
+                        requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True
+    if isinstance(exc, (ValueError, TypeError, KeyError, LookupError, PermissionError, FileNotFoundError)):
+        return False
+    return any(w in str(exc).lower() for w in _TEMPORARY_WORDS) or "OutOfMemory" in type(exc).__name__
 
 
 class JobContext:
@@ -97,11 +116,15 @@ class JobQueue:
                          language: str | None = None) -> list:
         """Chain jobs so each starts only after the previous one completed."""
         steps = steps or PIPELINE
-        ids, prev = [], None
+        ids, root = [], None
         for st in steps:
-            prev = self.enqueue(st, project_id, {"language": language} if language and st == "reel_generation" else {},
-                                depends_on=prev)
-            ids.append(prev)
+            # every step needs the transcript, but reels, posters and posts do not need each other: a failure in one
+            # must not stop the others, so they depend on the transcription only
+            jid = self.enqueue(st, project_id, {"language": language} if language and st == "reel_generation" else {},
+                               depends_on=root)
+            if st == "transcription" and root is None:
+                root = jid
+            ids.append(jid)
         for tr in translations or []:
             prev_t = self.enqueue("dubbing" if tr.get("dub") else "translation", project_id, tr, depends_on=ids[0] if ids else None)
             ids.append(prev_t)
@@ -128,6 +151,8 @@ class JobQueue:
                 return False
             j.status, j.error, j.progress, j.step = "queued", None, 0, ""
             j.started_at = j.completed_at = None
+            j.params_json = json.dumps({k: v for k, v in j.params.items() if k not in ("_auto_retries", "_retry_at")},
+                                       ensure_ascii=False)
             s.add(JobLog(job_id=j.id, level="INFO", message="Retry requested"))
             if j.project_id:
                 self._sync_project(s, j.project_id)
@@ -202,6 +227,8 @@ class JobQueue:
                     continue
                 if dep and dep.status != "completed":
                     continue
+            if float(j.params.get("_retry_at") or 0) > time.time():
+                continue                                # waiting to retry after a temporary error; others go first
             return j
         return None
 
@@ -221,7 +248,7 @@ class JobQueue:
                 self._sync_project(s, pid)
         self._current = jid
         ctx = JobContext(self.app, jid, pid, params)
-        status, error, result = "completed", None, {}
+        status, error, result, temporary = "completed", None, {}, False
         try:
             handler = self.handlers[jtype]
             result = handler(self.app, ctx) or {}
@@ -229,12 +256,28 @@ class JobQueue:
             status, error = "cancelled", "Cancelled by user"
         except Exception as e:      # noqa: BLE001 - every failure must be recorded on the job
             status, error = "failed", redact(f"{type(e).__name__}: {e}")
-            log.error("job %s failed: %s\n%s", jid, e, traceback.format_exc())
+            temporary = is_temporary(e)
+            log.error("job %s failed (%s): %s\n%s", jid, "temporary" if temporary else "permanent", e, traceback.format_exc())
         finally:
             self._cancel_flags.discard(jid)
             self._current = None
         with self.app.db.session() as s:
             j = s.get(ProcessingJob, jid)
+            if status == "failed" and temporary:
+                done = int(j.params.get("_auto_retries") or 0)
+                limit = int(self.app.config.get("jobs.auto_retries", 3))
+                if done < limit:                                           # temporary: try again later, automatically
+                    delay = float(self.app.config.get("jobs.retry_backoff_s", 20)) * (3 ** done)
+                    j.params_json = json.dumps({**j.params, "_auto_retries": done + 1, "_retry_at": time.time() + delay},
+                                               ensure_ascii=False)
+                    j.status, j.error, j.progress, j.step = "queued", None, 0, f"Waiting to retry ({done + 1} of {limit})"
+                    s.add(JobLog(job_id=jid, level="WARNING",
+                                 message=f"Temporary problem: {error}. Retrying automatically in {delay:.0f}s "
+                                         f"(retry {done + 1} of {limit})"))
+                    if pid:
+                        self._sync_project(s, pid)
+                    return jid
+                error = f"{error} (gave up after {limit} automatic retries)"
             j.status, j.error, j.completed_at = status, error, utcnow()
             j.result_json = json.dumps(result, ensure_ascii=False, default=str)
             if status == "completed":

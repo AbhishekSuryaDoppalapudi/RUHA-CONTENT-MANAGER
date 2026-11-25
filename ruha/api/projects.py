@@ -12,7 +12,9 @@ from ruha.config import JOB_TYPES, PROJECT_STATUSES
 from ruha.models import (AuditLog, ContentTag, GeneratedAsset, ProcessingJob, Project, SourceVideo, Transcript,
                          TranscriptSegment, Translation)
 from ruha.services import assets as asset_svc
+from ruha.services import instructions as instr_svc
 from ruha.services import projects as svc
+from ruha.services import selection
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -139,6 +141,8 @@ def delete_project(pid: int, confirm: bool = Query(False), ctx=Depends(app_ctx))
         p = get_or_404(s, Project, pid, "Project")
         info = svc.delete(ctx, s, p)
     clean = svc.finish_delete(ctx, info)
+    from ruha.services import brand as brand_svc
+    brand_svc.forget_project_kit(ctx, pid)            # a reused project id must not inherit the old logo/texts
     return {"deleted": pid, "files_removed": clean}
 
 
@@ -276,6 +280,8 @@ class ImportUrlIn(BaseModel):
     content_type: str = "sermon"
     process: bool = True
     language: str | None = None
+    steps: list[str] | None = None       # what to make: any of the generation jobs (None = everything); transcription is always done
+    extra: str = Field("", max_length=1500)   # "Others": anything else the owner wants, passed to the AI planner
 
 
 @router.post("/import-url", status_code=202)
@@ -286,12 +292,23 @@ def import_url(body: ImportUrlIn, ctx=Depends(app_ctx)):
         url = ytdl.validate_url(body.url)
     except ytdl.DownloadError as e:
         raise HTTPException(400, str(e))
+    from ruha.jobs import PIPELINE
+    steps = None
+    if body.steps is not None:
+        bad = [x for x in body.steps if x not in PIPELINE]
+        if bad:
+            raise HTTPException(400, f"Unknown step(s): {', '.join(bad)}")
+        steps = ["transcription"] + [x for x in PIPELINE if x != "transcription" and x in body.steps]
     with ctx.db.session() as s:
         p = svc.create(ctx, s, body.name.strip() or "Imported video", f"Imported from {url}", body.content_type, [])
         s.flush()
-        pid = p.id
+        pid, ws = p.id, Path(p.workspace_dir)
+    if body.extra.strip():
+        from ruha.services import instructions
+        cur = instructions.load(ws)
+        instructions.save(ws, cur["reels"], cur["posters"], extra=body.extra)
     jid = ctx.queue.enqueue("video_download", pid, {"url": url, "process": body.process, "language": body.language,
-                                                    "rename": not body.name.strip()})
+                                                    "rename": not body.name.strip(), "steps": steps})
     return {"project_id": pid, "job_id": jid}
 
 
@@ -342,14 +359,60 @@ def process(pid: int, body: ProcessIn | None = None, ctx=Depends(app_ctx)):
     return {"job_ids": ids}
 
 
+class InstructionsIn(BaseModel):
+    reels: str = ""      # one reel per line: "12:30-13:45 main - comment"
+    posters: str = ""    # free-text instructions for the poster
+    topic: str | None = None   # "Find a moment about ..." (None = keep the saved one)
+    caption_template: str | None = None   # stacked | wordpop | karaoke | classic ("" = the Settings default; None = keep)
+
+
+def _instr_ctx(ctx, pid):
+    with ctx.db.session() as s:
+        p = get_or_404(s, Project, pid, "Project")
+        v = svc.current_video(s, pid)
+        return Path(p.workspace_dir), (v.duration if v else None)
+
+
+@router.get("/projects/{pid}/instructions")
+def get_instructions(pid: int, ctx=Depends(app_ctx)):
+    ws, duration = _instr_ctx(ctx, pid)
+    d = instr_svc.load(ws)
+    return {"reels": d["reels"], "posters": d["posters"], "topic": d["topic"], "caption_template": d["caption_template"],
+            "video_seconds": duration}
+
+
+@router.put("/projects/{pid}/instructions")
+def put_instructions(pid: int, body: InstructionsIn, ctx=Depends(app_ctx)):
+    """Save the reels/posters boxes. Reel times are checked against the video length and any problem
+    is reported (400) before anything is saved."""
+    ws, duration = _instr_ctx(ctx, pid)
+    rs = selection.reel_settings(ctx.config.all())
+    try:
+        entries, warnings = instr_svc.parse_reels(body.reels, duration, (rs["min_s"], rs["max_s"]))
+        instr_svc.save(ws, body.reels, body.posters, topic=body.topic, caption_template=body.caption_template)
+    except instr_svc.InstructionError as e:
+        raise HTTPException(400, str(e))
+    return {"reels": body.reels.strip(), "posters": body.posters.strip(), "topic": instr_svc.load(ws)["topic"],
+            "caption_template": instr_svc.load(ws)["caption_template"], "warnings": warnings,
+            "parsed": [{"start": e["start"], "end": e["end"], "category": e["category"], "note": e["note"]} for e in entries]}
+
+
 @router.post("/projects/{pid}/jobs", status_code=202)
 def create_job(pid: int, body: JobIn, ctx=Depends(app_ctx)):
     if body.job_type not in JOB_TYPES:
         raise HTTPException(400, f"job_type must be one of {JOB_TYPES}")
+    if body.params.get("clone") and not (body.job_type == "dubbing" and body.params.get("clone_consent") is True):
+        raise HTTPException(400, "Voice cloning requires a dubbing job and confirmation that you have the "
+                                 "speaker's permission (clone_consent)")
     with ctx.db.session() as s:
         get_or_404(s, Project, pid, "Project")
         if body.job_type not in ("video_rendering", "image_reel") and not svc.current_video(s, pid):
             raise HTTPException(400, "Upload a video first")
+        if body.params.get("asset_id") is not None and body.job_type in ("translation", "dubbing"):
+            try:
+                asset_svc.reel_source(s, pid, body.params["asset_id"])
+            except ValueError as e:
+                raise HTTPException(400, str(e))
         if body.job_type == "image_reel" and not _image_files(Path(p0.workspace_dir) if (p0 := s.get(Project, pid)) else None):
             raise HTTPException(400, "Upload at least one image first")
     return {"job_id": ctx.queue.enqueue(body.job_type, pid, body.params)}

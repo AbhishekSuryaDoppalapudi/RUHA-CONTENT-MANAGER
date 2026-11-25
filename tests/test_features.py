@@ -1,5 +1,6 @@
 """Themes, creative subtitles + language, hook/closing cards, image reels, link import and project filters."""
 import io
+from pathlib import Path
 import shutil
 
 import pytest
@@ -57,11 +58,10 @@ def test_ass_subtitles_are_creative_and_script_aware(tmp_path):
     f = subtitles.build_ass([(0, 2, "The wonderful grace of God"), (2, 4, "దేవుని కృప అద్భుతమైనది")], tmp_path / "s.ass",
                             270, 480, {}, accent="#FFB74D")
     txt = f.read_text(encoding="utf-8-sig")
-    assert "WONDERFUL" in txt and "GRACE" in txt                  # Latin text is upper-cased
-    assert "Style: Latin" in txt and "Style: Indic" in txt
-    assert ",Indic,," in txt and ",Latin,," in txt          # Telugu line uses the Indic font, English the Latin one
+    assert "wonderful" in txt and "grace" in txt                  # stacked captions keep the speaker's own case
+    assert "Poppins" in txt and "Noto Sans Telugu" in txt         # English in Poppins, the Telugu line in Noto Sans Telugu
     assert "\\fad(" in txt and "\\t(0,170" in txt              # pop-in animation
-    assert "&H004DB7FF&" in txt                               # keyword highlighted in the accent colour
+    assert "4DB7FF" in txt                                    # a keyword highlighted in the accent colour (BGR)
 
 
 def test_reel_render_with_cards_and_ass_is_longer_than_clip(tmp_path, sample_video):
@@ -77,10 +77,10 @@ def test_reel_render_with_cards_and_ass_is_longer_than_clip(tmp_path, sample_vid
 
 
 # ------------------------------- pipeline output -----------------------------
-def test_pipeline_makes_one_main_two_short_one_poster_two_posts_with_themes(client, ctx, processed):
+def test_pipeline_makes_one_main_scored_shorts_one_poster_two_posts_with_themes(client, ctx, processed):
     a = assets(client, processed)
     kinds = [x["kind"] for x in a]
-    assert kinds.count("main_reel") == 1 and kinds.count("short_reel") == 2
+    assert kinds.count("main_reel") == 1 and kinds.count("short_reel") == 3      # 6 asked for; a 200 s video fits 3
     assert kinds.count("poster") == 1 and kinds.count("social_post") == 2
     reel = [x for x in a if x["kind"] == "main_reel"][0]
     d = client.get(f"/api/assets/{reel['id']}").json()
@@ -148,7 +148,7 @@ def test_image_upload_rejects_non_images_and_traversal(client):
 def test_import_url_downloads_then_runs_the_pipeline(client, ctx, sample_video, tmp_path, monkeypatch):
     from ruha.ai import ytdl
 
-    def fake_download(url, out_dir, max_height=720, progress=None):
+    def fake_download(url, out_dir, max_height=720, progress=None, log=None):
         out_dir.mkdir(parents=True, exist_ok=True)
         dst = out_dir / "abc123.mp4"
         shutil.copy2(sample_video, dst)
@@ -166,6 +166,30 @@ def test_import_url_downloads_then_runs_the_pipeline(client, ctx, sample_video, 
     assert kinds.count("main_reel") == 1 and kinds.count("poster") == 1
 
 
+def test_import_url_makes_only_the_ticked_things_and_keeps_the_owners_request(client, ctx, sample_video, monkeypatch):
+    from ruha.ai import ytdl
+    from ruha.services import instructions
+
+    def fake_download(url, out_dir, max_height=720, progress=None, log=None):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dst = out_dir / "abc123.mp4"
+        shutil.copy2(sample_video, dst)
+        return dst, "A Real Talk"
+    monkeypatch.setattr(ytdl, "download", fake_download)
+    url = "https://www.youtube.com/watch?v=abc123"
+    assert client.post("/api/import-url", json={"url": url, "steps": ["nonsense"]}).status_code == 400
+    r = client.post("/api/import-url", json={"url": url, "steps": ["carousel_generation"], "extra": "Focus on forgiveness"})
+    assert r.status_code == 202
+    pid = r.json()["project_id"]
+    ctx.queue.drain()
+    kinds = {x["kind"] for x in assets(client, pid)}
+    assert "carousel" in kinds and not kinds & {"main_reel", "poster", "short_reel", "thumbnail"}, kinds
+    from ruha.models import Project
+    with ctx.db.session() as s:
+        ws = Path(s.get(Project, pid).workspace_dir)
+    assert instructions.load(ws)["extra"] == "Focus on forgiveness"
+
+
 # ------------------------------- finding work easily -------------------------
 def test_library_and_review_filter_by_project_and_status(client, ctx, processed, sample_video):
     other = client.post("/api/projects", json={"name": "Other"}).json()["id"]
@@ -180,7 +204,7 @@ def test_library_and_review_filter_by_project_and_status(client, ctx, processed,
     assert [i["id"] for i in appr["items"]] == [first["id"]]
     rq = client.get("/api/dashboard").json()["review_queue"]
     # subtitles / transcripts are not reviewable, so they are not counted as "needs review"
-    assert rq.get("draft", 0) == 2 * (1 + 2 + 1 + 2) - 1
+    assert rq.get("draft", 0) == 2 * (1 + 3 + 1 + 2) - 1
 
 
 # ------------------------- HTML renderer, fonts, AI backgrounds -----------------------
@@ -257,3 +281,98 @@ def test_ai_prompts_describe_scenes_without_people():
         assert name in imagegen.THEME_SCENES and len(pr) > 40
         assert "person" not in pr.lower() and "face" not in pr.lower()
     assert "face" in imagegen.NEGATIVE and "text" in imagegen.NEGATIVE
+
+
+# ------------------------------- link download robustness ---------------------------
+class _FakeYDL:
+    attempts: list = []
+    plan: list = []
+
+    def __init__(self, opts):
+        self.opts = opts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def extract_info(self, url, download=True):
+        _FakeYDL.attempts.append(self.opts.get("extractor_args"))
+        outcome = _FakeYDL.plan[len(_FakeYDL.attempts) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        Path(self.opts["outtmpl"].replace("%(id)s.%(ext)s", "abc.mp4")).write_bytes(b"x" * 10)
+        return {"id": "abc", "title": "T", "ext": "mp4"}
+
+    def prepare_filename(self, info):
+        return self.opts["outtmpl"].replace("%(id)s", "abc").replace("%(ext)s", "mp4")
+
+
+def _run_download(tmp_path, monkeypatch, plan):
+    import sys
+    import types
+    from ruha.ai import ytdl
+    _FakeYDL.attempts, _FakeYDL.plan = [], plan
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=_FakeYDL))
+    return ytdl, ytdl.download("https://example.com/v", tmp_path, 720)
+
+
+def test_download_retries_another_client_after_a_403(tmp_path, monkeypatch):
+    ytdl, (path, title) = _run_download(tmp_path, monkeypatch, [Exception("HTTP Error 403: Forbidden"), "ok"])
+    assert path.exists() and title == "T"
+    assert _FakeYDL.attempts[0] is None and _FakeYDL.attempts[1]["youtube"]["player_client"]
+
+
+def test_download_gives_a_helpful_message_when_every_client_is_refused(tmp_path, monkeypatch):
+    from ruha.ai import ytdl
+    with pytest.raises(ytdl.DownloadError) as e:
+        _run_download(tmp_path, monkeypatch, [Exception("HTTP Error 403: Forbidden")] * 4)
+    assert "upload the file" in str(e.value) and len(_FakeYDL.attempts) == 4
+
+
+def test_download_does_not_retry_an_unrelated_error(tmp_path, monkeypatch):
+    from ruha.ai import ytdl
+    with pytest.raises(ytdl.DownloadError):
+        _run_download(tmp_path, monkeypatch, [Exception("Unsupported URL")])
+    assert len(_FakeYDL.attempts) == 1
+
+
+# ------------------------------- Dropbox / Google Drive / Vimeo links ---------
+def test_dropbox_links_become_direct_downloads_and_folders_are_refused():
+    from ruha.ai import ytdl
+    assert ytdl.dropbox_direct("https://www.dropbox.com/scl/fi/abc/talk.mp4?rlkey=k&dl=0") == \
+        "https://www.dropbox.com/scl/fi/abc/talk.mp4?rlkey=k&dl=1"
+    assert ytdl.dropbox_direct("https://www.dropbox.com/s/abc/talk.mp4").endswith("?dl=1")
+    for folder in ("https://www.dropbox.com/scl/fo/abc/x?rlkey=k", "https://drive.google.com/drive/folders/1AbC"):
+        with pytest.raises(ytdl.DownloadError, match="folder"):
+            ytdl.download(folder, Path("."), 720)
+
+
+def test_a_direct_link_is_streamed_and_a_web_page_is_refused(tmp_path):
+    import http.server
+    import threading
+    from ruha.ai import ytdl
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            ok = self.path.startswith("/talk")
+            body = b"\x00" * 3000 if ok else b"<html>sign in</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4" if ok else "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        seen = []
+        path, title = ytdl._download_direct(f"http://127.0.0.1:{srv.server_port}/talk.mp4", tmp_path, seen.append)
+        assert path.read_bytes() == b"\x00" * 3000 and title == "talk" and seen[-1] == 1.0
+        with pytest.raises(ytdl.DownloadError, match="not a video"):
+            ytdl._download_direct(f"http://127.0.0.1:{srv.server_port}/login", tmp_path)
+    finally:
+        srv.shutdown()
